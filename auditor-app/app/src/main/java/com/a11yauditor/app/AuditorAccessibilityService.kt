@@ -81,6 +81,16 @@ class AuditorAccessibilityService : AccessibilityService() {
      * own UI keeps working standalone either way.
      */
     private fun pollRemoteControl() {
+        // A local toggle in MainActivity writes prefs immediately (so it works
+        // even with no server), then pushes to the server in the background.
+        // If a poll lands in that gap, the server hasn't seen the change yet —
+        // applying its still-stale response here would silently revert the
+        // user's tap. Skip one cycle after a local change to let the push land;
+        // the grace window is shorter than the poll interval, so it costs at
+        // most a single skipped poll, not a lasting delay.
+        val lastLocalIntent = prefs.getLong(KEY_LOCAL_INTENT_AT, 0)
+        if (System.currentTimeMillis() - lastLocalIntent < LOCAL_INTENT_GRACE_MS) return
+
         val remote = controlSync.fetchControl() ?: return
         val wasAuditing = prefs.getBoolean(KEY_IS_AUDITING, false)
         val currentTarget = prefs.getString(KEY_TARGET_PACKAGE, null)
@@ -117,6 +127,14 @@ class AuditorAccessibilityService : AccessibilityService() {
             Log.d(TAG, "runAudit: rootInActiveWindow is null, skipping")
             return
         }
+        // The debounce delay means the foreground app can change between the
+        // event that scheduled this and now (user switched away, a system
+        // dialog took focus, etc). Re-check so we never audit or screenshot
+        // a different app than the one the user selected as the target.
+        if (root.packageName?.toString() != targetPackage) {
+            Log.d(TAG, "runAudit: foreground changed away from $targetPackage, skipping")
+            return
+        }
 
         val issuesWithoutScreenshot = try {
             checkHierarchy(root)
@@ -134,6 +152,14 @@ class AuditorAccessibilityService : AccessibilityService() {
         }
     }
 
+    // ponytail: runs synchronously on the main thread (called from the
+    // debounce Runnable, which is main-Handler-posted) — a screen with a very
+    // large visible tree could cause jank while checks run. Not moved off
+    // main without device-verifying AccessibilityNodeInfo's threading
+    // behavior first; an untested threading change risks trading rare jank
+    // for a real crash. Upgrade path: benchmark on a worst-case screen, and
+    // if it's actually slow, move hierarchy building + check execution to a
+    // background dispatcher.
     private fun checkHierarchy(root: AccessibilityNodeInfo): List<AuditIssue> {
         val hierarchy = AccessibilityHierarchyAndroid.newBuilder(root, applicationContext).build()
         val checks = AccessibilityCheckPreset.getAccessibilityHierarchyChecksForPreset(
@@ -147,8 +173,7 @@ class AuditorAccessibilityService : AccessibilityService() {
             .filter { it.type == AccessibilityCheckResultType.ERROR || it.type == AccessibilityCheckResultType.WARNING }
             .map { result ->
                 // result.sourceCheckClass / result.element are ATF's linkage back to
-                // which check fired and which node it fired on — see the class-level
-                // NOTE, names here are unverified against a real build.
+                // which check fired and which node it fired on.
                 val checkClassName = result.sourceCheckClass?.simpleName ?: "Unknown"
                 val criterion = WcagMapping.forCheckClass(checkClassName)
                 val element = result.element
@@ -213,8 +238,10 @@ class AuditorAccessibilityService : AccessibilityService() {
         const val PREFS_NAME = "a11y_auditor_prefs"
         const val KEY_TARGET_PACKAGE = "target_package"
         const val KEY_IS_AUDITING = "is_auditing"
+        const val KEY_LOCAL_INTENT_AT = "local_intent_at"
         private const val DEBOUNCE_MS = 600L
         private const val CONTROL_POLL_MS = 3000L
+        private const val LOCAL_INTENT_GRACE_MS = 2000L
 
         val serviceRunning = MutableStateFlow(false)
         val sessionIssueCount = MutableStateFlow(0)

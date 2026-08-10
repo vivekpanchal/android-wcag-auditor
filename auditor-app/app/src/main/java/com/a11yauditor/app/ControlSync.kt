@@ -37,7 +37,12 @@ class ControlSync(private val baseUrl: String = "http://localhost:8080") {
                     auditing = body.optBoolean("auditing", false),
                 )
             }
-        } catch (e: IOException) {
+        } catch (e: Exception) {
+            // Covers IOException (server unreachable) and org.json.JSONException
+            // (malformed/truncated body on a flaky connection) alike — this runs
+            // in an uncaught-exception-crashes-the-app poll loop, so any failure
+            // here must degrade to "try again next poll," never propagate.
+            Log.w(TAG, "fetchControl failed: ${e.message}")
             null
         }
     }

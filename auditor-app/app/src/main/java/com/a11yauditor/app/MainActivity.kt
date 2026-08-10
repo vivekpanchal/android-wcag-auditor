@@ -65,7 +65,10 @@ class MainActivity : AppCompatActivity() {
         val currentlyAuditing = prefs.getBoolean(AuditorAccessibilityService.KEY_IS_AUDITING, false)
 
         if (currentlyAuditing) {
-            prefs.edit().putBoolean(AuditorAccessibilityService.KEY_IS_AUDITING, false).apply()
+            prefs.edit()
+                .putBoolean(AuditorAccessibilityService.KEY_IS_AUDITING, false)
+                .putLong(AuditorAccessibilityService.KEY_LOCAL_INTENT_AT, System.currentTimeMillis())
+                .apply()
             controlSync.pushControl(selectedPackage, auditing = false)
         } else {
             val pkg = selectedPackage
@@ -81,6 +84,7 @@ class MainActivity : AppCompatActivity() {
             prefs.edit()
                 .putString(AuditorAccessibilityService.KEY_TARGET_PACKAGE, pkg)
                 .putBoolean(AuditorAccessibilityService.KEY_IS_AUDITING, true)
+                .putLong(AuditorAccessibilityService.KEY_LOCAL_INTENT_AT, System.currentTimeMillis())
                 .apply()
             controlSync.pushControl(pkg, auditing = true)
         }
