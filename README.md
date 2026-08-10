@@ -21,13 +21,10 @@ yours or someone else's, doesn't matter.
                                                         ▼
                                           ┌──────────────────────┐
                                           │  Node server :8080    │
-                                          │  (/server)            │
-                                          └──────────┬───────────┘
-                                                      │ WebSocket
-                                                      ▼
-                                          ┌──────────────────────┐
-                                          │  React dashboard      │
-                                          │  (/dashboard, :5173)  │
+                                          │  (/server) — serves    │
+                                          │  the API, WebSocket,  │
+                                          │  and the built React  │
+                                          │  dashboard, one port  │
                                           └──────────────────────┘
 ```
 
@@ -77,25 +74,29 @@ directly if the app hasn't reported in yet.
 
 ## Setup
 
-### 1. Server
+### 1. Build the dashboard, then start the server
 
-```bash
-cd server
-npm install
-npm start          # listens on http://localhost:8080
-```
-
-### 2. Dashboard
+The server serves the API, the WebSocket, and the dashboard's build output all from one process —
+build the dashboard once, then just run the server:
 
 ```bash
 cd dashboard
 npm install
-npm run dev         # http://localhost:5173
+npm run build       # produces dashboard/dist
+
+cd ../server
+npm install
+npm start           # http://localhost:8080 — dashboard, API, and WebSocket, all on one port
 ```
 
-Open the printed URL in your browser. It'll show "No active session" until issues start arriving.
+Open `http://localhost:8080` in your browser. It'll show "No active session" until issues start
+arriving.
 
-### 3. Auditor app
+Actively working on the dashboard's UI? Run `npm run dev` in `dashboard/` instead (Vite dev server
+on `:5173` with hot-module-reload) — it still talks to the same API on `:8080` via CORS. The server
+falls back to API-only (no static files) if `dashboard/dist` doesn't exist yet.
+
+### 2. Auditor app
 
 Build and install from Android Studio (open `auditor-app/`, hit Run), or from the command line
 once the Gradle wrapper is present:
@@ -111,12 +112,12 @@ Or install a prebuilt APK directly:
 adb install auditor-app.apk
 ```
 
-### 4. Enable the accessibility service
+### 3. Enable the accessibility service
 
 On the device: **Settings → Accessibility → A11y Auditor → On**, or tap "Enable Accessibility
 Service" inside the app, which jumps straight to that settings screen.
 
-### 5. Connect device to the local server
+### 4. Connect device to the local server
 
 ```bash
 adb reverse tcp:8080 tcp:8080
@@ -125,7 +126,7 @@ adb reverse tcp:8080 tcp:8080
 This makes the device's `localhost:8080` point at your machine's `localhost:8080`, so the Auditor
 app can just POST to `http://localhost:8080/report` without knowing your machine's LAN IP.
 
-### 6. Pick a target and go
+### 5. Pick a target and go
 
 Either works — they stay in sync (see "Controlling from the dashboard" above):
 
@@ -135,7 +136,7 @@ Either works — they stay in sync (see "Controlling from the dashboard" above):
    `com.example.myapp`.
 3. Tap **Start Auditing**.
 
-**From the dashboard** (`http://localhost:5173`) — no need to touch the phone at all once the
+**From the dashboard** (`http://localhost:8080`) — no need to touch the phone at all once the
 service is enabled:
 1. Type the target package name into the control bar at the top.
 2. Click **Start Auditing**. The phone picks it up within a few seconds.
@@ -146,7 +147,7 @@ Then, either way:
 5. Watch issues appear live in the dashboard, grouped by screen, with a running count by severity.
 6. Click/tap **Stop Auditing** — from either the dashboard or the app — when done.
 
-### 7. Export a report
+### 6. Export a report
 
 In the dashboard: **Export HTML** for a shareable report grouped by screen, or **Export CSV** for
 raw data. **Clear Session** wipes the in-memory store to start a fresh audit run.

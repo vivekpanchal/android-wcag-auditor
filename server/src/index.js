@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
+const path = require('path');
+const fs = require('fs');
 const { WebSocketServer } = require('ws');
 const store = require('./store');
 const { toCsv, toHtml } = require('./export');
@@ -13,8 +15,18 @@ const DEVICE_TIMEOUT_MS = 8000;
 let deviceOnline = false;
 
 const app = express();
-app.use(cors()); // dashboard runs on a different port (Vite dev server / static host)
+app.use(cors()); // still needed for `vite dev` on :5173 during dashboard development
 app.use(express.json({ limit: '10mb' })); // screenshots are base64
+
+// Serve the dashboard's production build if it's been built
+// (cd dashboard && npm run build) — one process, one port, for normal use.
+// Falls back to nothing if it hasn't been built yet; run the Vite dev
+// server separately (npm run dev in dashboard/) while actively working on
+// the UI, which still talks to this same API via CORS.
+const dashboardDist = path.join(__dirname, '..', '..', 'dashboard', 'dist');
+if (fs.existsSync(dashboardDist)) {
+  app.use(express.static(dashboardDist));
+}
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
