@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">A11y Auditor</string>
+    <string name="accessibility_service_description">Watches the app you pick below and reports WCAG accessibility issues to your local dashboard as you navigate it. Does not read or transmit content from any other app.</string>
+
+    <string name="hint_manual_package">Or type a package name…</string>
+    <string name="btn_start">Start Auditing</string>
+    <string name="btn_stop">Stop Auditing</string>
+    <string name="btn_enable_service">Enable Accessibility Service</string>
+    <string name="status_service_disabled">Accessibility service is OFF — enable it to start auditing</string>
+    <string name="status_service_enabled">Accessibility service is ON</string>
+    <string name="status_no_target">No target app selected</string>
+    <string name="label_issue_count">Issues found this session: %1$d</string>
+</resources>

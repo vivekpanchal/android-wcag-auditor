@@ -1,0 +1,18 @@
+{
+  "name": "a11y-auditor-server",
+  "version": "1.0.0",
+  "description": "Local report/dashboard backend for the standalone A11y Auditor Android app",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "ws": "^8.21.3"
+  }
+}

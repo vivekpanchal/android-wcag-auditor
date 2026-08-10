@@ -1,0 +1,84 @@
+:root {
+  color-scheme: light;
+  --surface-1:      #fcfcfb;   /* card / control surface */
+  --page-plane:     #f9f9f7;   /* page background */
+  --text-primary:   #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted:     #898781;
+  --gridline:       #e1e0d9;
+  --border:         rgba(11, 11, 11, 0.10);
+  --accent:         #2a78d6;   /* categorical slot 1 — WCAG tag, links, primary actions */
+  --accent-tint:    #e7f0fb;
+
+  --status-critical: #d03b3b;
+  --status-serious:  #ec835a;
+  --status-warning:  #fab219;  /* used for "moderate" severity */
+  --status-good:     #0ca30c;  /* used for "minor" severity */
+  --status-ok-text:  #006300;
+  --status-bad-text: #c62828;
+
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--text-primary);
+  background: var(--page-plane);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --border:         rgba(255, 255, 255, 0.10);
+    --accent:         #3987e5;
+    --accent-tint:    #16283e;
+
+    --status-critical: #e66767;
+    --status-serious:  #ec835a;
+    --status-warning:  #fab219;
+    --status-good:     #0ca30c;
+    --status-ok-text:  #0ca30c;
+    --status-bad-text: #e66767;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1:      #1a1a19;
+  --page-plane:     #0d0d0d;
+  --text-primary:   #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted:     #898781;
+  --gridline:       #2c2c2a;
+  --border:         rgba(255, 255, 255, 0.10);
+  --accent:         #3987e5;
+  --accent-tint:    #16283e;
+
+  --status-critical: #e66767;
+  --status-serious:  #ec835a;
+  --status-warning:  #fab219;
+  --status-good:     #0ca30c;
+  --status-ok-text:  #0ca30c;
+  --status-bad-text: #e66767;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100svh;
+  background: var(--page-plane);
+}
+
+h1, h2 {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+code {
+  font-family: ui-monospace, Consolas, monospace;
+}

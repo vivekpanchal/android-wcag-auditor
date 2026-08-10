@@ -1,0 +1,8 @@
+# Claude Code local session config — machine-specific, not part of the project
+.claude/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
