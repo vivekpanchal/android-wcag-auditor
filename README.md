@@ -1,5 +1,8 @@
 # A11y Auditor — Runtime WCAG Auditor for Android
 
+[![CI](https://github.com/vivekpanchal/android-wcag-auditor/actions/workflows/ci.yml/badge.svg)](https://github.com/vivekpanchal/android-wcag-auditor/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/github/license/vivekpanchal/android-wcag-auditor)](LICENSE)
+
 Standalone accessibility auditor: install one APK, point it at any other app already on the
 device, and watch WCAG-mapped accessibility issues stream into a local web dashboard as you
 navigate that app. **No changes to the target app's code or build required** — debug or release,
