@@ -30,8 +30,9 @@ package com.a11yauditor.app
  * should never fall through to UNKNOWN for a result produced by this pinned
  * ATF version. If the ATF version in auditor-app/gradle/libs.versions.toml is
  * ever bumped, re-verify: unzip the `accessibility-test-framework-*-api.jar`
- * and `-runtime.jar` from the Gradle cache, list the `*/checks/*Check.class`
- * entries in each, and diff that list against `byCheckClass`'s keys.
+ * and `-runtime.jar` from the Gradle cache, list the `*Check.class` entries
+ * under each jar's checks package, and diff that list against
+ * `byCheckClass`'s keys.
  *
  * If a future ATF version renames or splits a check, add/update the entry
  * here — everything else keys off this map, so this is the one place to
