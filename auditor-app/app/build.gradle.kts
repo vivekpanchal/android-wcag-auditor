@@ -1,6 +1,6 @@
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
 }
 
 android {
@@ -40,21 +40,21 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("com.google.android.material:material:1.12.0")
-    implementation("androidx.recyclerview:recyclerview:1.3.2")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.material)
+    implementation(libs.androidx.recyclerview)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.kotlinx.coroutines.android)
 
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation(libs.okhttp)
 
     // Google's Accessibility Test Framework for Android — runs the actual
     // WCAG-mapped checks against the AccessibilityNodeInfo tree.
     // https://github.com/google/Accessibility-Test-Framework-for-Android
-    implementation("com.google.android.apps.common.testing.accessibility.framework:accessibility-test-framework:4.1.1")
+    implementation(libs.accessibility.test.framework)
     // ATF's public API returns Guava collection types (ImmutableSet, etc.)
     // directly but doesn't expose Guava transitively — needed to reference
     // those return types from our own code.
-    implementation("com.google.guava:guava:33.3.1-android")
+    implementation(libs.guava)
 }
