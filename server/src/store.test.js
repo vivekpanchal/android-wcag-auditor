@@ -1,9 +1,23 @@
-const { test, beforeEach } = require('node:test');
+const { test, beforeEach, after } = require('node:test');
 const assert = require('node:assert/strict');
-const store = require('./store');
+const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+
+// Point the store at a throwaway db file for this test run so tests don't
+// leak state into the dev db (server/data.db) or between runs.
+const dbPath = path.join(os.tmpdir(), `a11y-store-test-${process.pid}-${Date.now()}.db`);
+process.env.A11Y_DB_PATH = dbPath;
+
+let store = require('./store');
 
 beforeEach(() => {
   store.clearIssues();
+});
+
+after(() => {
+  // Best-effort cleanup; sqlite may still hold the file open on Windows.
+  try { fs.rmSync(dbPath, { force: true }); } catch { /* ignore */ }
 });
 
 test('addReport applies the report-level screenshot to every stored issue', () => {
@@ -30,4 +44,25 @@ test('addReport stores a null screenshot when the report has none', () => {
   });
 
   assert.equal(stored[0].screenshot, null);
+});
+
+test('issues survive a server restart (same db file, fresh module instance)', () => {
+  store.addReport({
+    packageName: 'com.example.app',
+    screen: 'MainScreen',
+    timestamp: 2000,
+    issues: [{ severity: 'critical', wcagSC: '1.1.1', wcagLevel: 'A', elementDescription: 'Button', description: 'Missing label', bounds: { x: 1, y: 2, width: 3, height: 4 } }],
+  });
+
+  // Simulate a process restart: drop the cached module and re-require it
+  // against the same A11Y_DB_PATH. A real restart re-runs the process, but
+  // dropping the require cache re-triggers the module's own db-open/schema
+  // setup, which is the part under test.
+  delete require.cache[require.resolve('./store')];
+  store = require('./store');
+
+  const issues = store.getIssues();
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].description, 'Missing label');
+  assert.deepEqual(issues[0].bounds, { x: 1, y: 2, width: 3, height: 4 });
 });

@@ -1,73 +1,120 @@
-// In-memory issue store. Swap to SQLite later by reimplementing these
-// functions against a table with the same fields.
-let issues = [];
-let nextId = 1;
+// SQLite-backed issue store. Persists across restarts (see server/data.db,
+// gitignored). Path overridable via A11Y_DB_PATH for test isolation.
+'use strict';
 
-// Desired auditing state, set by the dashboard, polled by the device (the
-// device can't be pushed to directly — adb reverse only lets it reach us,
-// not the other way around).
-let control = { targetPackage: null, auditing: false, updatedAt: null };
+const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
 
-// Installed-app list, reported by the device (same one-directional reasoning
-// as control) so the dashboard can offer a real picker instead of free text.
-let appList = [];
+const dbPath = process.env.A11Y_DB_PATH || path.join(__dirname, '..', 'data.db');
+const db = new DatabaseSync(dbPath);
 
-// The device's control poll doubles as a heartbeat — no separate ping needed.
-let deviceLastSeen = null;
+db.exec(`
+  CREATE TABLE IF NOT EXISTS issues (
+    id INTEGER PRIMARY KEY,
+    packageName TEXT,
+    screen TEXT,
+    timestamp INTEGER,
+    severity TEXT,
+    wcagSC TEXT,
+    wcagLevel TEXT,
+    elementDescription TEXT,
+    description TEXT,
+    suggestedFix TEXT,
+    screenshot TEXT,
+    bounds TEXT
+  );
+  CREATE TABLE IF NOT EXISTS state (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  );
+`);
+
+// control/appList/deviceLastSeen/nextId are singletons -- one row each in
+// `state`, keyed by name, JSON-encoded. Not worth their own tables.
+function getState(key, fallback) {
+  const row = db.prepare('SELECT value FROM state WHERE key = ?').get(key);
+  return row ? JSON.parse(row.value) : fallback;
+}
+
+const setStateStmt = db.prepare(
+  'INSERT INTO state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+);
+function setState(key, value) {
+  setStateStmt.run(key, JSON.stringify(value));
+}
+
+function takeNextId() {
+  const id = getState('nextId', 1);
+  setState('nextId', id + 1);
+  return id;
+}
+
+const insertIssueStmt = db.prepare(`
+  INSERT INTO issues (id, packageName, screen, timestamp, severity, wcagSC, wcagLevel, elementDescription, description, suggestedFix, screenshot, bounds)
+  VALUES (:id, :packageName, :screen, :timestamp, :severity, :wcagSC, :wcagLevel, :elementDescription, :description, :suggestedFix, :screenshot, :bounds)
+`);
+
+function rowToIssue(row) {
+  return { ...row, bounds: row.bounds ? JSON.parse(row.bounds) : null };
+}
 
 function touchDevice() {
-  deviceLastSeen = Date.now();
+  setState('deviceLastSeen', Date.now());
 }
 
 function getDeviceLastSeen() {
-  return deviceLastSeen;
+  return getState('deviceLastSeen', null);
 }
 
 function addReport(report) {
   const { packageName, screen, timestamp, screenshot, issues: reportIssues = [] } = report;
-  const stored = reportIssues.map((issue) => ({
-    id: nextId++,
-    packageName,
-    screen,
-    timestamp,
-    severity: issue.severity,
-    wcagSC: issue.wcagSC,
-    wcagLevel: issue.wcagLevel,
-    elementDescription: issue.elementDescription,
-    description: issue.description,
-    suggestedFix: issue.suggestedFix,
-    screenshot: screenshot || null,
-    bounds: issue.bounds || null,
-  }));
-  issues.push(...stored);
+  const stored = reportIssues.map((issue) => {
+    const row = {
+      id: takeNextId(),
+      packageName: packageName ?? null,
+      screen: screen ?? null,
+      timestamp: timestamp ?? null,
+      severity: issue.severity ?? null,
+      wcagSC: issue.wcagSC ?? null,
+      wcagLevel: issue.wcagLevel ?? null,
+      elementDescription: issue.elementDescription ?? null,
+      description: issue.description ?? null,
+      suggestedFix: issue.suggestedFix ?? null,
+      screenshot: screenshot || null,
+      bounds: issue.bounds || null,
+    };
+    insertIssueStmt.run({ ...row, bounds: row.bounds ? JSON.stringify(row.bounds) : null });
+    return row;
+  });
   return stored;
 }
 
 function getIssues() {
-  return issues;
+  return db.prepare('SELECT * FROM issues ORDER BY id').all().map(rowToIssue);
 }
 
 function clearIssues() {
-  issues = [];
-  nextId = 1;
+  db.exec('DELETE FROM issues');
+  setState('nextId', 1);
 }
 
 function getControl() {
-  return control;
+  return getState('control', { targetPackage: null, auditing: false, updatedAt: null });
 }
 
 function setControl(patch) {
-  control = { ...control, ...patch, updatedAt: Date.now() };
+  const control = { ...getControl(), ...patch, updatedAt: Date.now() };
+  setState('control', control);
   return control;
 }
 
 function getAppList() {
-  return appList;
+  return getState('appList', []);
 }
 
 function setAppList(apps) {
-  appList = apps;
-  return appList;
+  setState('appList', apps);
+  return apps;
 }
 
 module.exports = {
