@@ -67,7 +67,7 @@ type a package name directly if the app hasn't reported in yet.
 
 ## Prerequisites
 
-- Node.js 18+ (for `server/` and `dashboard/`)
+- Node.js 22.5+ (for `server/` and `dashboard/` — `server/` uses the built-in `node:sqlite` module, added in 22.5)
 - Android Studio (to build `auditor-app/` — it'll fetch/repair the Gradle wrapper on first open)
 - A device or emulator running Android 8.0 (API 26) or newer, with `adb` on your `PATH`
   - Screenshots in reported issues require Android 11 (API 30)+; on older devices the Auditor

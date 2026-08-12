@@ -31,8 +31,9 @@ db.exec(`
 
 // control/appList/deviceLastSeen/nextId are singletons -- one row each in
 // `state`, keyed by name, JSON-encoded. Not worth their own tables.
+const getStateStmt = db.prepare('SELECT value FROM state WHERE key = ?');
 function getState(key, fallback) {
-  const row = db.prepare('SELECT value FROM state WHERE key = ?').get(key);
+  const row = getStateStmt.get(key);
   return row ? JSON.parse(row.value) : fallback;
 }
 
@@ -89,8 +90,9 @@ function addReport(report) {
   return stored;
 }
 
+const getIssuesStmt = db.prepare('SELECT * FROM issues ORDER BY id');
 function getIssues() {
-  return db.prepare('SELECT * FROM issues ORDER BY id').all().map(rowToIssue);
+  return getIssuesStmt.all().map(rowToIssue);
 }
 
 function clearIssues() {
