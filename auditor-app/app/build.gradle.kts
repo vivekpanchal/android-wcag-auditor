@@ -57,4 +57,6 @@ dependencies {
     // directly but doesn't expose Guava transitively — needed to reference
     // those return types from our own code.
     implementation(libs.guava)
+
+    testImplementation(libs.junit)
 }
