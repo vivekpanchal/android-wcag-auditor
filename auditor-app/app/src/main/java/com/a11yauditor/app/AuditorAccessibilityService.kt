@@ -57,7 +57,19 @@ class AuditorAccessibilityService : AccessibilityService() {
         serviceRunning.value = true
         pollJob = serviceScope.launch {
             while (isActive) {
-                pollRemoteControl()
+                try {
+                    pollRemoteControl()
+                } catch (e: Exception) {
+                    // A malformed server response from ControlSync or a
+                    // SharedPreferences read/write hiccup here would otherwise
+                    // escape this coroutine — and SupervisorJob only stops that
+                    // failure from cancelling sibling coroutines, it does NOT
+                    // swallow the exception itself. Uncaught, it still reaches
+                    // Android's default UncaughtExceptionHandler and kills the
+                    // whole process even though this runs on Dispatchers.IO, not
+                    // the main thread. Log and keep polling next cycle instead.
+                    Log.e(TAG, "pollRemoteControl failed, will retry next cycle", e)
+                }
                 delay(CONTROL_POLL_MS)
             }
         }
@@ -105,18 +117,30 @@ class AuditorAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        val targetPackage = prefs.getString(KEY_TARGET_PACKAGE, null) ?: return
-        val auditing = prefs.getBoolean(KEY_IS_AUDITING, false)
-        if (!auditing) return
-        if (event.packageName?.toString() != targetPackage) return
+        // This is called by the system on the main thread for every window/
+        // content-change event for the life of the audit session — an
+        // uncaught exception here (a SharedPreferences value of the wrong
+        // type throwing ClassCastException, an OEM quirk on event field
+        // access, etc.) propagates straight out of the system's dispatch
+        // call and kills the whole process. One bad frame would silently end
+        // the entire session instead of just being skipped, so catch broadly
+        // and move on to the next event.
+        try {
+            val targetPackage = prefs.getString(KEY_TARGET_PACKAGE, null) ?: return
+            val auditing = prefs.getBoolean(KEY_IS_AUDITING, false)
+            if (!auditing) return
+            if (event.packageName?.toString() != targetPackage) return
 
-        // Content-changed events fire rapidly while a screen settles (layout
-        // passes, animations, etc). Debounce so we audit once the screen is
-        // actually still, not on every intermediate frame.
-        pendingAudit?.let { mainHandler.removeCallbacks(it) }
-        val runnable = Runnable { runAudit(targetPackage, event.className?.toString()) }
-        pendingAudit = runnable
-        mainHandler.postDelayed(runnable, DEBOUNCE_MS)
+            // Content-changed events fire rapidly while a screen settles (layout
+            // passes, animations, etc). Debounce so we audit once the screen is
+            // actually still, not on every intermediate frame.
+            pendingAudit?.let { mainHandler.removeCallbacks(it) }
+            val runnable = Runnable { runAudit(targetPackage, event.className?.toString()) }
+            pendingAudit = runnable
+            mainHandler.postDelayed(runnable, DEBOUNCE_MS)
+        } catch (e: Exception) {
+            Log.e(TAG, "onAccessibilityEvent failed, skipping this event", e)
+        }
     }
 
     override fun onInterrupt() {}
@@ -205,15 +229,36 @@ class AuditorAccessibilityService : AccessibilityService() {
                 mainExecutor,
                 object : TakeScreenshotCallback {
                     override fun onSuccess(result: ScreenshotResult) {
-                        val bitmap = Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
-                        result.hardwareBuffer.close()
-                        if (bitmap == null) {
-                            onResult(null)
-                            return
+                        // Runs on mainExecutor (see takeScreenshot call below), so an
+                        // uncaught exception here crashes on the main thread, not a
+                        // background one. wrapHardwareBuffer can throw
+                        // IllegalArgumentException for a ColorSpace it doesn't support
+                        // (seen on some OEM wide-gamut displays), and compress() can
+                        // throw IllegalStateException if the bitmap it got back is
+                        // already recycled. Either way, degrade to no-screenshot rather
+                        // than kill the whole session over a missing image. Scoped to
+                        // just the conversion (not onResult itself) so a failure further
+                        // downstream in the caller's callback — e.g. ReportSender — isn't
+                        // misreported as a screenshot failure and double-delivered.
+                        val png = try {
+                            val bitmap = try {
+                                Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
+                            } finally {
+                                // Close even if wrapHardwareBuffer throws — it wraps
+                                // native memory, and the outer catch below means we'd
+                                // otherwise leak it on the exception path.
+                                result.hardwareBuffer.close()
+                            }
+                            bitmap?.let {
+                                val out = ByteArrayOutputStream()
+                                it.compress(Bitmap.CompressFormat.PNG, 100, out)
+                                out.toByteArray()
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "screenshot bitmap conversion failed", e)
+                            null
                         }
-                        val out = ByteArrayOutputStream()
-                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-                        onResult(out.toByteArray())
+                        onResult(png)
                     }
 
                     override fun onFailure(errorCode: Int) {
