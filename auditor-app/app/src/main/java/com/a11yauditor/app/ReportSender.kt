@@ -11,6 +11,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import com.google.android.apps.common.testing.accessibility.framework.replacements.Rect
 
 data class AuditIssue(
     val severity: String,
@@ -20,6 +21,9 @@ data class AuditIssue(
     val description: String,
     val suggestedFix: String?,
     val screenshotPng: ByteArray?,
+    // Screen-pixel bounds of the flagged element, same coordinate space as
+    // screenshotPng — lets the dashboard draw a highlight box on the image.
+    val bounds: Rect? = null,
 )
 
 /**
@@ -50,6 +54,14 @@ class ReportSender(private val serverUrl: String = "http://localhost:8080/report
                         issue.suggestedFix?.let { put("suggestedFix", it) }
                         issue.screenshotPng?.let {
                             put("screenshot", Base64.encodeToString(it, Base64.NO_WRAP))
+                        }
+                        issue.bounds?.let {
+                            put("bounds", JSONObject().apply {
+                                put("x", it.left)
+                                put("y", it.top)
+                                put("width", it.width)
+                                put("height", it.height)
+                            })
                         }
                     })
                 }

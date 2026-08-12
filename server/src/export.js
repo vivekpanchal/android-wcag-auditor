@@ -37,7 +37,11 @@ function toHtml(issues) {
           <p class="element"><strong>Element:</strong> ${escapeHtml(i.elementDescription)}</p>
           <p class="description">${escapeHtml(i.description)}</p>
           ${i.suggestedFix ? `<p class="fix"><strong>Suggested fix:</strong> ${escapeHtml(i.suggestedFix)}</p>` : ''}
-          ${i.screenshot ? `<img class="screenshot" src="data:image/png;base64,${i.screenshot}" alt="Screenshot of ${escapeHtml(i.elementDescription)}" />` : ''}
+          ${i.screenshot ? `
+          <div class="screenshot-wrap">
+            <img class="screenshot" src="data:image/png;base64,${i.screenshot}" alt="Screenshot of ${escapeHtml(i.elementDescription)}" />
+            ${i.bounds ? `<div class="screenshot-highlight" data-bounds="${i.bounds.x},${i.bounds.y},${i.bounds.width},${i.bounds.height}"></div>` : ''}
+          </div>` : ''}
         </div>
       `).join('')}
     </section>
@@ -64,13 +68,33 @@ function toHtml(issues) {
   .badge.severity { background: #eee; }
   .badge.wcag { background: #e3f2fd; color: #0d47a1; }
   .timestamp { color: #999; font-size: 0.8rem; }
-  .screenshot { max-width: 300px; display: block; margin-top: 0.5rem; border: 1px solid #ccc; }
+  .screenshot-wrap { position: relative; display: inline-block; overflow: hidden; margin-top: 0.5rem; }
+  .screenshot { max-width: 300px; display: block; border: 1px solid #ccc; }
+  .screenshot-highlight { position: absolute; border: 2px solid #d32f2f; box-shadow: 0 0 0 9999px rgba(211, 47, 47, 0.18); pointer-events: none; }
 </style>
 </head>
 <body>
   <h1>Accessibility Audit Report</h1>
   <p class="meta">Generated ${new Date().toLocaleString()} — ${issues.length} total issue(s)</p>
   ${sections || '<p>No issues recorded.</p>'}
+  <script>
+    // Bounds are in the screenshot's own pixel space, so the highlight box
+    // is positioned as a percentage of the loaded image's natural size.
+    document.querySelectorAll('.screenshot-wrap').forEach((wrap) => {
+      const img = wrap.querySelector('img');
+      const box = wrap.querySelector('.screenshot-highlight');
+      if (!img || !box) return;
+      const position = () => {
+        const [x, y, width, height] = box.dataset.bounds.split(',').map(Number);
+        box.style.left = (x / img.naturalWidth) * 100 + '%';
+        box.style.top = (y / img.naturalHeight) * 100 + '%';
+        box.style.width = (width / img.naturalWidth) * 100 + '%';
+        box.style.height = (height / img.naturalHeight) * 100 + '%';
+      };
+      if (img.complete) position();
+      else img.onload = position;
+    });
+  </script>
 </body>
 </html>`;
 }

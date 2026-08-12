@@ -37,6 +37,7 @@ function addReport(report) {
     description: issue.description,
     suggestedFix: issue.suggestedFix,
     screenshot: issue.screenshot || null,
+    bounds: issue.bounds || null,
   }));
   issues.push(...stored);
   return stored;

@@ -10,6 +10,35 @@ function severityRank(s) {
   return { critical: 0, serious: 1, moderate: 2, minor: 3 }[s] ?? 4;
 }
 
+// Bounds are in the screenshot's own pixel space (same coordinate system the
+// Android accessibility service reads them in), so the highlight box is
+// positioned as a percentage of the image's natural size — no separate
+// screen-size field needed from the device.
+function ScreenshotWithHighlight({ screenshot, bounds, alt, wrapClassName, imgClassName, onClick }) {
+  const [natural, setNatural] = useState(null);
+  return (
+    <div className={wrapClassName} onClick={onClick}>
+      <img
+        className={imgClassName}
+        src={`data:image/png;base64,${screenshot}`}
+        alt={alt}
+        onLoad={(e) => setNatural({ w: e.target.naturalWidth, h: e.target.naturalHeight })}
+      />
+      {bounds && natural && (
+        <div
+          className="issue-highlight"
+          style={{
+            left: `${(bounds.x / natural.w) * 100}%`,
+            top: `${(bounds.y / natural.h) * 100}%`,
+            width: `${(bounds.width / natural.w) * 100}%`,
+            height: `${(bounds.height / natural.h) * 100}%`,
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 function IssueCard({ issue, onShowScreenshot }) {
   return (
     <div className={`issue-card severity-${issue.severity || 'unknown'}`}>
@@ -25,11 +54,13 @@ function IssueCard({ issue, onShowScreenshot }) {
       <p className="issue-description">{issue.description}</p>
       {issue.suggestedFix && <p className="issue-fix">Fix: {issue.suggestedFix}</p>}
       {issue.screenshot && (
-        <img
-          className="issue-thumb"
-          src={`data:image/png;base64,${issue.screenshot}`}
+        <ScreenshotWithHighlight
+          screenshot={issue.screenshot}
+          bounds={issue.bounds}
           alt={`Screenshot: ${issue.elementDescription}`}
-          onClick={() => onShowScreenshot(issue.screenshot)}
+          wrapClassName="issue-thumb-wrap"
+          imgClassName="issue-thumb"
+          onClick={() => onShowScreenshot(issue)}
         />
       )}
     </div>
@@ -249,7 +280,12 @@ export default function App() {
 
       {lightbox && (
         <div className="lightbox" onClick={() => setLightbox(null)}>
-          <img src={`data:image/png;base64,${lightbox}`} alt="Enlarged screenshot" />
+          <ScreenshotWithHighlight
+            screenshot={lightbox.screenshot}
+            bounds={lightbox.bounds}
+            alt="Enlarged screenshot"
+            wrapClassName="lightbox-img-wrap"
+          />
         </div>
       )}
     </div>

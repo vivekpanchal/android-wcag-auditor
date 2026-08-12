@@ -177,6 +177,7 @@ class AuditorAccessibilityService : AccessibilityService() {
                 val checkClassName = result.sourceCheckClass?.simpleName ?: "Unknown"
                 val criterion = WcagMapping.forCheckClass(checkClassName)
                 val element = result.element
+                val bounds = element?.boundsInScreen?.takeUnless { it.isEmpty }
                 AuditIssue(
                     severity = if (result.type == AccessibilityCheckResultType.ERROR) "serious" else "moderate",
                     wcagSc = criterion.sc,
@@ -185,6 +186,7 @@ class AuditorAccessibilityService : AccessibilityService() {
                     description = result.getMessage(Locale.getDefault())?.toString() ?: result.toString(),
                     suggestedFix = null,
                     screenshotPng = null,
+                    bounds = bounds,
                 )
             }
     }
