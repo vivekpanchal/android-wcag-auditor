@@ -174,6 +174,9 @@ describe('App WebSocket "issues" message handling', () => {
 
   it('appends new issues and dedups by id on repeated "issues" messages', async () => {
     render(<App />);
+    // Flush the mount effect's fetch().then(setState) microtasks before driving
+    // WS messages, so they don't land mid-assertion and race the act() calls below.
+    await act(async () => {});
 
     const ws = FakeWebSocket.instances[0];
     expect(ws).toBeTruthy();
@@ -210,6 +213,7 @@ describe('App WebSocket "issues" message handling', () => {
 
   it('replaces issues entirely on a "clear" message', async () => {
     render(<App />);
+    await act(async () => {});
     const ws = FakeWebSocket.instances[0];
 
     act(() => {
