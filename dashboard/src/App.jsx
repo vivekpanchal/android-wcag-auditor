@@ -74,6 +74,7 @@ export default function App() {
   const [targetInput, setTargetInput] = useState('');
   const [controlBusy, setControlBusy] = useState(false);
   const [apps, setApps] = useState([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [deviceOnline, setDeviceOnline] = useState(false);
   const [severityFilter, setSeverityFilter] = useState('all');
   const [levelFilter, setLevelFilter] = useState('all');
@@ -123,6 +124,13 @@ export default function App() {
       ws?.close();
     };
   }, []);
+
+  const matchedApps = useMemo(() => {
+    const q = targetInput.trim().toLowerCase();
+    return apps
+      .filter((a) => !q || a.appName.toLowerCase().includes(q) || a.packageName.toLowerCase().includes(q))
+      .sort((a, b) => a.appName.localeCompare(b.appName));
+  }, [apps, targetInput]);
 
   const screens = useMemo(() => [...new Set(issues.map((i) => i.screen).filter(Boolean))], [issues]);
 
@@ -196,18 +204,38 @@ export default function App() {
       </header>
 
       <section className="control-bar">
-        <input
-          className="target-input"
-          type="text"
-          list="installed-apps"
-          placeholder={deviceOnline ? 'Target package, e.g. com.example.app' : 'Connect a device to pick a target'}
-          value={targetInput}
-          onChange={(e) => setTargetInput(e.target.value)}
-          disabled={control.auditing}
-        />
-        <datalist id="installed-apps">
-          {apps.map((a) => <option key={a.packageName} value={a.packageName}>{a.appName}</option>)}
-        </datalist>
+        <div className="app-picker">
+          <input
+            className="target-input"
+            type="text"
+            placeholder={deviceOnline ? 'Search apps or type a package name…' : 'Connect a device to pick a target'}
+            value={targetInput}
+            onChange={(e) => setTargetInput(e.target.value)}
+            onFocus={() => setPickerOpen(true)}
+            onBlur={() => setTimeout(() => setPickerOpen(false), 150)}
+            disabled={control.auditing}
+          />
+          {pickerOpen && !control.auditing && (
+            <div className="app-picker-dropdown">
+              {apps.length === 0 && (
+                <div className="app-picker-empty">No apps reported yet — open the Auditor app on your phone.</div>
+              )}
+              {apps.length > 0 && matchedApps.length === 0 && (
+                <div className="app-picker-empty">No apps match "{targetInput}".</div>
+              )}
+              {matchedApps.map((a) => (
+                <div
+                  key={a.packageName}
+                  className="app-picker-option"
+                  onMouseDown={() => setTargetInput(a.packageName)}
+                >
+                  <span className="app-picker-name">{a.appName}</span>
+                  <span className="app-picker-package">{a.packageName}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         <button
           className={`btn btn-primary ${control.auditing ? 'btn-danger' : ''}`}
           onClick={toggleAuditing}

@@ -4,7 +4,8 @@
   "description": "Local report/dashboard backend for the standalone A11y Auditor Android app",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test src/*.test.js"
   },
   "keywords": [],
   "author": "",

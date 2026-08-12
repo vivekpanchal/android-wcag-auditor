@@ -24,7 +24,7 @@ function getDeviceLastSeen() {
 }
 
 function addReport(report) {
-  const { packageName, screen, timestamp, issues: reportIssues = [] } = report;
+  const { packageName, screen, timestamp, screenshot, issues: reportIssues = [] } = report;
   const stored = reportIssues.map((issue) => ({
     id: nextId++,
     packageName,
@@ -36,7 +36,7 @@ function addReport(report) {
     elementDescription: issue.elementDescription,
     description: issue.description,
     suggestedFix: issue.suggestedFix,
-    screenshot: issue.screenshot || null,
+    screenshot: screenshot || null,
     bounds: issue.bounds || null,
   }));
   issues.push(...stored);

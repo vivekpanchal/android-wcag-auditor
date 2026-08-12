@@ -7,7 +7,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.IOException
 
 data class RemoteControl(val targetPackage: String?, val auditing: Boolean)
 
@@ -57,14 +56,7 @@ class ControlSync(private val baseUrl: String = "http://localhost:8080") {
             .url("$baseUrl/control")
             .post(body.toString().toRequestBody(jsonMediaType))
             .build()
-        client.newCall(request).enqueue(object : okhttp3.Callback {
-            override fun onFailure(call: okhttp3.Call, e: IOException) {
-                Log.w(TAG, "pushControl failed: ${e.message}")
-            }
-            override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
-                response.close()
-            }
-        })
+        client.newCall(request).enqueue(loggingCallback(TAG, "push control"))
     }
 
     /** Fire-and-forget — lets the dashboard offer a real app picker instead of free text. */
@@ -82,15 +74,7 @@ class ControlSync(private val baseUrl: String = "http://localhost:8080") {
             .url("$baseUrl/apps")
             .post(body.toString().toRequestBody(jsonMediaType))
             .build()
-        client.newCall(request).enqueue(object : okhttp3.Callback {
-            override fun onFailure(call: okhttp3.Call, e: IOException) {
-                Log.w(TAG, "pushAppList failed: ${e.message}")
-            }
-            override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
-                Log.i(TAG, "pushAppList response: ${response.code}")
-                response.close()
-            }
-        })
+        client.newCall(request).enqueue(loggingCallback(TAG, "push app list"))
     }
 
     companion object {

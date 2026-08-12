@@ -19,6 +19,7 @@ jobs:
         with:
           node-version: 20
       - run: npm install
+      - run: npm test
       - name: Start app and smoke-test it serves both the dashboard and the API
         run: |
           npm start &

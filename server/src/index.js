@@ -65,6 +65,7 @@ app.post('/report', (req, res) => {
     packageName,
     screen: req.body.screen,
     timestamp: req.body.timestamp || Date.now(),
+    screenshot: req.body.screenshot,
     issues,
   });
   broadcast({ type: 'issues', issues: stored });

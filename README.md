@@ -52,10 +52,11 @@ start an audit while offline, both in the UI (Start is disabled) and server-side
 (`POST /control` with `auditing: true` 409s if no device has been seen recently) — so you can't
 accidentally "start" an audit that has no device to run on.
 
-**App picker:** the Auditor app POSTs its installed-apps list to `POST /apps` once on launch
-(`MainActivity.onCreate`); the dashboard's target field is an `<input list>` wired to a
-`<datalist>` of that list — native browser autocomplete, still lets you type a package name
-directly if the app hasn't reported in yet.
+**App picker:** the Auditor app POSTs its installed-apps list to `POST /apps` on every
+`onResume` (not just cold start, so a missed push — server not up yet, a network blip — heals
+itself the next time you switch back to the app instead of requiring a relaunch). The dashboard's
+target field is a search box with a dropdown of matching apps (name + package), still lets you
+type a package name directly if the app hasn't reported in yet.
 
 ## Project layout
 
@@ -86,6 +87,8 @@ npm start           # builds the dashboard, then serves it + the API + the WebSo
 
 Open `http://localhost:8080` in your browser. It'll show "No active session" until issues start
 arriving.
+
+`npm test` runs the server's tests (`node --test`, no separate framework).
 
 Actively working on the dashboard's UI? Run `npm run dev` from the repo root instead (Vite dev
 server on `:5173` with hot-module-reload) — it still talks to the same API on `:8080` via CORS. The

@@ -35,7 +35,6 @@ class MainActivity : AppCompatActivity() {
             selectedPackage = app.packageName
             binding.manualPackageInput.setText(app.packageName)
         }
-        controlSync.pushAppList(installedApps)
 
         binding.manualPackageInput.setOnEditorActionListener { _, actionId, event ->
             val committed = actionId == EditorInfo.IME_ACTION_DONE ||
@@ -58,6 +57,11 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshStatus()
+        // Re-sent on every resume, not just the cold-start onCreate: the app
+        // list push is fire-and-forget, so if it missed (server not up yet,
+        // transient network blip) the dashboard's picker would otherwise stay
+        // empty until the Activity was destroyed and recreated.
+        controlSync.pushAppList(loadInstalledApps())
     }
 
     private fun toggleAuditing() {

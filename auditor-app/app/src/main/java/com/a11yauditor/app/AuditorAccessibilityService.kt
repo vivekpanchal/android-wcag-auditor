@@ -136,19 +136,18 @@ class AuditorAccessibilityService : AccessibilityService() {
             return
         }
 
-        val issuesWithoutScreenshot = try {
+        val issues = try {
             checkHierarchy(root)
         } catch (e: Exception) {
             Log.e(TAG, "ATF check run failed", e)
             emptyList()
         }
-        Log.d(TAG, "runAudit: ${issuesWithoutScreenshot.size} issue(s) on $screenName")
-        if (issuesWithoutScreenshot.isEmpty()) return
+        Log.d(TAG, "runAudit: ${issues.size} issue(s) on $screenName")
+        if (issues.isEmpty()) return
 
         captureScreenshot { png ->
-            val issues = issuesWithoutScreenshot.map { it.copy(screenshotPng = png) }
             sessionIssueCount.value += issues.size
-            reportSender.send(targetPackage, screenName, issues)
+            reportSender.send(targetPackage, screenName, issues, png)
         }
     }
 
@@ -185,7 +184,6 @@ class AuditorAccessibilityService : AccessibilityService() {
                     elementDescription = describeElement(element?.className, element?.resourceName),
                     description = result.getMessage(Locale.getDefault())?.toString() ?: result.toString(),
                     suggestedFix = null,
-                    screenshotPng = null,
                     bounds = bounds,
                 )
             }
