@@ -152,6 +152,10 @@ Then, either way:
 In the dashboard: **Export HTML** for a shareable report grouped by screen, or **Export CSV** for
 raw data. **Clear Session** wipes the in-memory store to start a fresh audit run.
 
+When ATF reports the failing element's bounds, both the dashboard and the HTML export draw a
+highlighted box over it on the screenshot (click a thumbnail to enlarge) — no more hunting for
+which element on a busy screen actually failed.
+
 ## WCAG mapping
 
 `auditor-app/app/src/main/java/com/a11yauditor/app/WcagMapping.kt` maps each ATF check class to a
