@@ -16,7 +16,7 @@ beforeEach(() => {
 });
 
 after(() => {
-  // Best-effort cleanup; sqlite may still hold the file open on Windows.
+  try { store.close(); } catch { /* already closed by the restart test */ }
   try { fs.rmSync(dbPath, { force: true }); } catch { /* ignore */ }
 });
 
@@ -54,10 +54,11 @@ test('issues survive a server restart (same db file, fresh module instance)', ()
     issues: [{ severity: 'critical', wcagSC: '1.1.1', wcagLevel: 'A', elementDescription: 'Button', description: 'Missing label', bounds: { x: 1, y: 2, width: 3, height: 4 } }],
   });
 
-  // Simulate a process restart: drop the cached module and re-require it
-  // against the same A11Y_DB_PATH. A real restart re-runs the process, but
-  // dropping the require cache re-triggers the module's own db-open/schema
-  // setup, which is the part under test.
+  // Simulate a process restart: close the db handle, drop the cached module,
+  // and re-require it against the same A11Y_DB_PATH. Closing first matters —
+  // a real restart drops all handles, and leaving this one open is flaky on
+  // Windows (file still locked) besides not representing a real restart.
+  store.close();
   delete require.cache[require.resolve('./store')];
   store = require('./store');
 

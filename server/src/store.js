@@ -34,7 +34,14 @@ db.exec(`
 const getStateStmt = db.prepare('SELECT value FROM state WHERE key = ?');
 function getState(key, fallback) {
   const row = getStateStmt.get(key);
-  return row ? JSON.parse(row.value) : fallback;
+  if (!row) return fallback;
+  try {
+    return JSON.parse(row.value);
+  } catch {
+    // Corrupted/truncated row (manual edit, crash mid-write) -- treat as
+    // missing rather than taking the whole server down on the next read.
+    return fallback;
+  }
 }
 
 const setStateStmt = db.prepare(
@@ -44,10 +51,13 @@ function setState(key, value) {
   setStateStmt.run(key, JSON.stringify(value));
 }
 
-function takeNextId() {
-  const id = getState('nextId', 1);
-  setState('nextId', id + 1);
-  return id;
+// Reserves a contiguous block of `count` ids in one read+write instead of
+// one round trip per issue -- avoids advancing nextId ahead of ids that
+// might still fail to insert.
+function reserveIdBlock(count) {
+  const start = getState('nextId', 1);
+  setState('nextId', start + count);
+  return start;
 }
 
 const insertIssueStmt = db.prepare(`
@@ -56,7 +66,12 @@ const insertIssueStmt = db.prepare(`
 `);
 
 function rowToIssue(row) {
-  return { ...row, bounds: row.bounds ? JSON.parse(row.bounds) : null };
+  if (!row.bounds) return { ...row, bounds: null };
+  try {
+    return { ...row, bounds: JSON.parse(row.bounds) };
+  } catch {
+    return { ...row, bounds: null };
+  }
 }
 
 function touchDevice() {
@@ -69,24 +84,34 @@ function getDeviceLastSeen() {
 
 function addReport(report) {
   const { packageName, screen, timestamp, screenshot, issues: reportIssues = [] } = report;
-  const stored = reportIssues.map((issue) => {
-    const row = {
-      id: takeNextId(),
-      packageName: packageName ?? null,
-      screen: screen ?? null,
-      timestamp: timestamp ?? null,
-      severity: issue.severity ?? null,
-      wcagSC: issue.wcagSC ?? null,
-      wcagLevel: issue.wcagLevel ?? null,
-      elementDescription: issue.elementDescription ?? null,
-      description: issue.description ?? null,
-      suggestedFix: issue.suggestedFix ?? null,
-      screenshot: screenshot || null,
-      bounds: issue.bounds || null,
-    };
-    insertIssueStmt.run({ ...row, bounds: row.bounds ? JSON.stringify(row.bounds) : null });
-    return row;
-  });
+  if (reportIssues.length === 0) return [];
+
+  const startId = reserveIdBlock(reportIssues.length);
+  const stored = reportIssues.map((issue, i) => ({
+    id: startId + i,
+    packageName: packageName ?? null,
+    screen: screen ?? null,
+    timestamp: timestamp ?? null,
+    severity: issue.severity ?? null,
+    wcagSC: issue.wcagSC ?? null,
+    wcagLevel: issue.wcagLevel ?? null,
+    elementDescription: issue.elementDescription ?? null,
+    description: issue.description ?? null,
+    suggestedFix: issue.suggestedFix ?? null,
+    screenshot: screenshot || null,
+    bounds: issue.bounds || null,
+  }));
+
+  db.exec('BEGIN');
+  try {
+    for (const row of stored) {
+      insertIssueStmt.run({ ...row, bounds: row.bounds ? JSON.stringify(row.bounds) : null });
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
   return stored;
 }
 
@@ -119,9 +144,14 @@ function setAppList(apps) {
   return apps;
 }
 
+function close() {
+  db.close();
+}
+
 module.exports = {
   addReport, getIssues, clearIssues,
   getControl, setControl,
   getAppList, setAppList,
   touchDevice, getDeviceLastSeen,
+  close,
 };
