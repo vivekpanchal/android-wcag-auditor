@@ -1,6 +1,8 @@
 # Claude Code local session config — machine-specific, not part of the project
 .claude/
 
+node_modules/
+
 # Editor / OS
 .vscode/
 .idea/

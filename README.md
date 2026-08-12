@@ -74,27 +74,22 @@ directly if the app hasn't reported in yet.
 
 ## Setup
 
-### 1. Build the dashboard, then start the server
+### 1. Install and start
 
-The server serves the API, the WebSocket, and the dashboard's build output all from one process —
-build the dashboard once, then just run the server:
+`dashboard/` and `server/` are npm workspaces under the repo root — one install, one command, run
+from the repo root:
 
 ```bash
-cd dashboard
 npm install
-npm run build       # produces dashboard/dist
-
-cd ../server
-npm install
-npm start           # http://localhost:8080 — dashboard, API, and WebSocket, all on one port
+npm start           # builds the dashboard, then serves it + the API + the WebSocket on :8080
 ```
 
 Open `http://localhost:8080` in your browser. It'll show "No active session" until issues start
 arriving.
 
-Actively working on the dashboard's UI? Run `npm run dev` in `dashboard/` instead (Vite dev server
-on `:5173` with hot-module-reload) — it still talks to the same API on `:8080` via CORS. The server
-falls back to API-only (no static files) if `dashboard/dist` doesn't exist yet.
+Actively working on the dashboard's UI? Run `npm run dev` from the repo root instead (Vite dev
+server on `:5173` with hot-module-reload) — it still talks to the same API on `:8080` via CORS. The
+server falls back to API-only (no static files) if `dashboard/dist` doesn't exist yet.
 
 ### 2. Auditor app
 

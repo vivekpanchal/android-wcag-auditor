@@ -1,0 +1,13 @@
+{
+  "name": "a11y-auditor",
+  "private": true,
+  "workspaces": [
+    "dashboard",
+    "server"
+  ],
+  "scripts": {
+    "build": "npm run build -w dashboard",
+    "start": "npm run build && npm start -w server",
+    "dev": "npm run dev -w dashboard"
+  }
+}

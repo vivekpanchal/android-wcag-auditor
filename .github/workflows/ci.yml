@@ -7,41 +7,19 @@ on:
     branches: [main]
 
 jobs:
-  dashboard:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: dashboard
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: npm install
-      - run: npm run build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dashboard-dist
-          path: dashboard/dist
-
-  # Builds on the dashboard's output to smoke-test the actual merged
+  # dashboard/ and server/ are npm workspaces under the repo root — one
+  # install, one `npm start` builds the dashboard and boots the server on
+  # it, same as the README's documented flow. Smoke-tests the real merged
   # deliverable: the server serving the dashboard build + API on one port.
-  server:
+  app:
     runs-on: ubuntu-latest
-    needs: dashboard
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - uses: actions/download-artifact@v4
-        with:
-          name: dashboard-dist
-          path: dashboard/dist
       - run: npm install
-        working-directory: server
-      - name: Start server and smoke-test it serves both the dashboard and the API
-        working-directory: server
+      - name: Start app and smoke-test it serves both the dashboard and the API
         run: |
           npm start &
           for i in $(seq 1 20); do
