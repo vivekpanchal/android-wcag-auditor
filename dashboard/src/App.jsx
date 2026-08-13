@@ -1,20 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import './App.css';
+import { matchApps, filterIssues, groupIssues } from './logic';
 
 const SERVER = 'http://localhost:8080';
 const WS_URL = 'ws://localhost:8080';
 
 const SEVERITIES = ['critical', 'serious', 'moderate', 'minor'];
 
-function severityRank(s) {
-  return { critical: 0, serious: 1, moderate: 2, minor: 3 }[s] ?? 4;
-}
-
 // Bounds are in the screenshot's own pixel space (same coordinate system the
 // Android accessibility service reads them in), so the highlight box is
 // positioned as a percentage of the image's natural size — no separate
 // screen-size field needed from the device.
-function ScreenshotWithHighlight({ screenshot, bounds, alt, wrapClassName, imgClassName, onClick }) {
+export function ScreenshotWithHighlight({ screenshot, bounds, alt, wrapClassName, imgClassName, onClick }) {
   const [natural, setNatural] = useState(null);
   return (
     <div className={wrapClassName} onClick={onClick}>
@@ -125,12 +122,7 @@ export default function App() {
     };
   }, []);
 
-  const matchedApps = useMemo(() => {
-    const q = targetInput.trim().toLowerCase();
-    return apps
-      .filter((a) => !q || a.appName.toLowerCase().includes(q) || a.packageName.toLowerCase().includes(q))
-      .sort((a, b) => a.appName.localeCompare(b.appName));
-  }, [apps, targetInput]);
+  const matchedApps = useMemo(() => matchApps(apps, targetInput), [apps, targetInput]);
 
   const screens = useMemo(() => [...new Set(issues.map((i) => i.screen).filter(Boolean))], [issues]);
 
@@ -140,25 +132,12 @@ export default function App() {
     return counts;
   }, [issues]);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return issues
-      .filter((i) => severityFilter === 'all' || i.severity === severityFilter)
-      .filter((i) => levelFilter === 'all' || i.wcagLevel === levelFilter)
-      .filter((i) => screenFilter === 'all' || i.screen === screenFilter)
-      .filter((i) => !q || `${i.elementDescription} ${i.description}`.toLowerCase().includes(q));
-  }, [issues, severityFilter, levelFilter, screenFilter, search]);
+  const filtered = useMemo(
+    () => filterIssues(issues, { severityFilter, levelFilter, screenFilter, search }),
+    [issues, severityFilter, levelFilter, screenFilter, search]
+  );
 
-  const grouped = useMemo(() => {
-    const map = new Map();
-    for (const issue of filtered) {
-      const key = issue.screen || 'Unknown screen';
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(issue);
-    }
-    for (const list of map.values()) list.sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
-    return map;
-  }, [filtered]);
+  const grouped = useMemo(() => groupIssues(filtered), [filtered]);
 
   const clearSession = async () => {
     await fetch(`${SERVER}/issues`, { method: 'DELETE' });
