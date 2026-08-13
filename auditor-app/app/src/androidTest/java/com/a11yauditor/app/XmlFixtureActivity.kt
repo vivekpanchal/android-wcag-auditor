@@ -2,6 +2,7 @@ package com.a11yauditor.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import com.a11yauditor.app.test.R
 
 /**
  * Instrumented-test-only fixture hosting a real XML view tree with two seeded

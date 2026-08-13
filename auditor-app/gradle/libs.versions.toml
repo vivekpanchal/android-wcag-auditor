@@ -15,7 +15,7 @@ composeBom = "2024.09.00"
 composeCompiler = "1.5.14"
 activityCompose = "1.9.2"
 androidxTestExtJunit = "1.2.1"
-androidxTestRunner = "1.6.2"
+androidxTestRunner = "1.4.0"
 androidxTestCore = "1.6.1"
 
 [libraries]

@@ -17,7 +17,7 @@
         android:id="@+id/noDescriptionImage"
         android:layout_width="64dp"
         android:layout_height="64dp"
-        android:src="@drawable/ic_launcher" />
+        android:src="@android:drawable/ic_menu_gallery" />
 
     <View
         android:id="@+id/smallTouchTarget"
