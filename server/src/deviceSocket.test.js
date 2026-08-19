@@ -194,6 +194,47 @@ test('a dashboard-style catch-all WebSocketServer on the same http.Server does n
   await new Promise((resolve) => dashboardServer.close(resolve));
 });
 
+test('an upgrade request to an unrecognized path is rejected, not left hanging', async () => {
+  // Regression test: the dashboard's and device's 'upgrade' listeners each
+  // only act on their own path and otherwise return without touching the
+  // socket -- correct for letting the other one get a turn, but with
+  // nothing else registered, a genuinely unmatched path (typo, stray
+  // client) would be left open forever, since Node doesn't reject a
+  // handshake on its own just because *an* 'upgrade' listener exists.
+  const { WebSocketServer: WSS } = require('ws');
+  const stubServer = http.createServer();
+  const stubWss = new WSS({ noServer: true });
+  stubServer.on('upgrade', (req, socket, head) => {
+    if (req.url !== '/') return;
+    stubWss.handleUpgrade(req, socket, head, (ws) => stubWss.emit('connection', ws, req));
+  });
+  const stubDevice = attachDeviceSocket(stubServer, { broadcast: () => {} });
+  // The catch-all reject index.js registers alongside the two path-scoped
+  // listeners above -- see the matching comment there.
+  stubServer.on('upgrade', (req, socket) => {
+    if (req.url === '/' || req.url.startsWith('/ws/device')) return;
+    socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+    socket.destroy();
+  });
+
+  await new Promise((resolve) => stubServer.listen(0, resolve));
+  const stubPort = stubServer.address().port;
+
+  const ws = new WebSocket(`ws://localhost:${stubPort}/not-a-real-path`);
+  const failure = await new Promise((resolve, reject) => {
+    ws.once('unexpected-response', (req, res) => resolve(res.statusCode));
+    ws.once('open', () => reject(new Error('expected the handshake to be rejected, not to succeed')));
+    // Belt and suspenders: if neither fires, this test times out loudly
+    // (via node --test's own timeout) rather than hanging silently forever,
+    // which is exactly the bug this guards against.
+  });
+
+  assert.equal(failure, 400);
+
+  stubDevice.close();
+  await new Promise((resolve) => stubServer.close(resolve));
+});
+
 test('a report with no issues is not stored or broadcast', async () => {
   const ws = await connectClient();
   await nextMessage(ws);

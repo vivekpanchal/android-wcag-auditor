@@ -46,6 +46,19 @@ function broadcast(msg) {
 // seconds". See deviceSocket.js.
 const device = attachDeviceSocket(server, { broadcast });
 
+// Neither of the two listeners above touches a request for any other path
+// -- each only checks its own -- so without this, an upgrade request to an
+// unrecognized path (a typo, a stray client) would just hang: Node doesn't
+// reject a handshake on its own just because some 'upgrade' listener
+// exists. This always fires alongside them; harmless for '/' and
+// '/ws/device' since the socket is already handed off by the time this
+// runs for those.
+server.on('upgrade', (req, socket) => {
+  if (req.url === '/' || req.url.startsWith('/ws/device')) return;
+  socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+  socket.destroy();
+});
+
 wss.on('connection', (ws) => {
   ws.send(JSON.stringify({
     type: 'init',

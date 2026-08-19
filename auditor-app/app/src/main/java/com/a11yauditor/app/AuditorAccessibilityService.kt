@@ -68,32 +68,34 @@ class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener
     /**
      * Picks up target/auditing changes pushed from the server the instant
      * the dashboard (or this device's own UI) changes them — see
-     * DeviceSocket. Runs on OkHttp's callback thread, not main; prefs
-     * writes and sessionIssueCount are both safe to touch off-main.
+     * DeviceSocket. Runs on OkHttp's reader thread, not main; wrapped in
+     * try/catch for the same reason onAccessibilityEvent() is below: an
+     * uncaught exception here would escape onto that thread and kill the
+     * whole process instead of just being skipped.
+     *
+     * No local-change grace window: unlike the old poll, a push is always
+     * sent right after store.setControl() completes, so it can never
+     * carry state that predates a local change still in flight — an echo
+     * of this device's own change already lands on the no-op branch
+     * below. A window here would only ever drop a push outright (nothing
+     * re-sends a skipped one), trading a rare, already-harmless echo race
+     * for a real, permanent desync.
      */
     override fun onControl(targetPackage: String?, auditing: Boolean) {
-        // A local toggle in MainActivity writes prefs immediately (so it
-        // works even with no server), then pushes to the server in the
-        // background. If a push from the server lands in that gap — e.g.
-        // this exact change echoed back before the local write settles, or
-        // a stale one racing it — applying it here could re-derive the
-        // same state (harmless) or, in a genuine concurrent-change race,
-        // clobber the user's tap. Skip one window after a local change to
-        // let it settle; costs at most a brief delay picking up a
-        // genuinely concurrent remote change, not a lasting one.
-        val lastLocalIntent = prefs.getLong(KEY_LOCAL_INTENT_AT, 0)
-        if (System.currentTimeMillis() - lastLocalIntent < LOCAL_INTENT_GRACE_MS) return
+        try {
+            val wasAuditing = prefs.getBoolean(KEY_IS_AUDITING, false)
+            val currentTarget = prefs.getString(KEY_TARGET_PACKAGE, null)
+            if (auditing == wasAuditing && targetPackage == currentTarget) return
 
-        val wasAuditing = prefs.getBoolean(KEY_IS_AUDITING, false)
-        val currentTarget = prefs.getString(KEY_TARGET_PACKAGE, null)
-        if (auditing == wasAuditing && targetPackage == currentTarget) return
-
-        Log.i(TAG, "remote control changed: auditing=$auditing target=$targetPackage")
-        if (auditing && !wasAuditing) sessionIssueCount.value = 0
-        prefs.edit()
-            .putString(KEY_TARGET_PACKAGE, targetPackage)
-            .putBoolean(KEY_IS_AUDITING, auditing)
-            .apply()
+            Log.i(TAG, "remote control changed: auditing=$auditing target=$targetPackage")
+            if (auditing && !wasAuditing) sessionIssueCount.value = 0
+            prefs.edit()
+                .putString(KEY_TARGET_PACKAGE, targetPackage)
+                .putBoolean(KEY_IS_AUDITING, auditing)
+                .apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "onControl failed, ignoring this push", e)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -263,9 +265,7 @@ class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener
         const val PREFS_NAME = "a11y_auditor_prefs"
         const val KEY_TARGET_PACKAGE = "target_package"
         const val KEY_IS_AUDITING = "is_auditing"
-        const val KEY_LOCAL_INTENT_AT = "local_intent_at"
         private const val DEBOUNCE_MS = 600L
-        private const val LOCAL_INTENT_GRACE_MS = 2000L
 
         val serviceRunning = MutableStateFlow(false)
         val sessionIssueCount = MutableStateFlow(0)
