@@ -2,7 +2,7 @@
   "name": "a11y-auditor",
   "private": true,
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22.5.0"
   },
   "workspaces": [
     "dashboard",
