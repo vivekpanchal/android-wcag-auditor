@@ -8,7 +8,7 @@
 // within the last 8 seconds".
 'use strict';
 
-const { WebSocketServer, WebSocket } = require('ws');
+const { WebSocket } = require('ws');
 const store = require('./store');
 
 // A silently dropped Wi-Fi/USB link doesn't always deliver a clean TCP
@@ -18,20 +18,12 @@ const HEARTBEAT_INTERVAL_MS = 15000;
 
 const DEVICE_PATH = '/ws/device';
 
-function attachDeviceSocket(httpServer, { broadcast }) {
-  // noServer + a manual 'upgrade' listener, not { server, path } -- `ws`
-  // aborts the handshake with a 400 whenever a WebSocketServer's own path
-  // doesn't match, instead of leaving it for the next 'upgrade' listener to
-  // try. With another WebSocketServer (the dashboard's, in index.js) also
-  // attached to this same http.Server, that races and kills whichever
-  // connection loses. Checking the path ourselves and only calling
-  // handleUpgrade on a match — doing nothing otherwise — lets both
-  // coexist regardless of registration order.
-  const wss = new WebSocketServer({ noServer: true });
-  httpServer.on('upgrade', (req, socket, head) => {
-    if (!req.url || !req.url.startsWith(DEVICE_PATH)) return;
-    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
-  });
+// `wsRouter` handles routing this http.Server's WebSocket upgrades to the
+// right WebSocketServer by path -- see wsRouter.js for why that can't
+// safely be done with `ws`'s own { server, path } option once more than
+// one WebSocketServer shares an http.Server.
+function attachDeviceSocket(wsRouter, { broadcast }) {
+  const wss = wsRouter.route(DEVICE_PATH);
   const clients = new Set();
   let online = false;
 

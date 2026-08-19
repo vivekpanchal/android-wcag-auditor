@@ -14,6 +14,7 @@ process.env.A11Y_DB_PATH = dbPath;
 
 const store = require('./store');
 const { attachDeviceSocket } = require('./deviceSocket');
+const { createWsRouter } = require('./wsRouter');
 
 let server;
 let device;
@@ -56,7 +57,8 @@ function wait(ms) {
 before(async () => {
   server = http.createServer();
   broadcasts = [];
-  device = attachDeviceSocket(server, { broadcast: (msg) => broadcasts.push(msg) });
+  const wsRouter = createWsRouter(server);
+  device = attachDeviceSocket(wsRouter, { broadcast: (msg) => broadcasts.push(msg) });
   await new Promise((resolve) => server.listen(0, resolve));
   port = server.address().port;
 });
@@ -160,23 +162,17 @@ test('malformed JSON from the device is ignored, not crashing the connection', a
   await wait(30);
 });
 
-test('a dashboard-style catch-all WebSocketServer on the same http.Server does not swallow /ws/device connections', async () => {
-  // Regression test: a WebSocketServer created with no `path` option claims
-  // every upgrade request on the shared http.Server, including ones meant
-  // for a different, path-scoped WebSocketServer attached to the same
-  // server -- unless it's also given an explicit path. This mirrors
-  // index.js's actual wiring (the dashboard's `wss` alongside
-  // attachDeviceSocket's own WebSocketServer) closely enough to catch that
-  // class of bug, without depending on index.js itself.
-  const { WebSocketServer: WSS } = require('ws');
+test('attachDeviceSocket composes with a router that also has another route registered', async () => {
+  // Integration check that attachDeviceSocket correctly claims only its own
+  // path on a shared router, alongside a stand-in for the dashboard's own
+  // route -- the actual path-vs-path routing behavior (including rejecting
+  // an unrecognized path) is covered directly and more thoroughly in
+  // wsRouter.test.js, not duplicated here.
   const dashboardServer = http.createServer();
-  const dashboardWss = new WSS({ noServer: true });
-  dashboardServer.on('upgrade', (req, socket, head) => {
-    if (req.url !== '/') return;
-    dashboardWss.handleUpgrade(req, socket, head, (ws) => dashboardWss.emit('connection', ws, req));
-  });
+  const dashboardRouter = createWsRouter(dashboardServer);
+  const dashboardWss = dashboardRouter.route('/', { exact: true });
   dashboardWss.on('connection', (ws) => ws.send(JSON.stringify({ type: 'init' })));
-  const dashboardDevice = attachDeviceSocket(dashboardServer, { broadcast: () => {} });
+  const dashboardDevice = attachDeviceSocket(dashboardRouter, { broadcast: () => {} });
 
   await new Promise((resolve) => dashboardServer.listen(0, resolve));
   const dashboardPort = dashboardServer.address().port;
@@ -192,47 +188,6 @@ test('a dashboard-style catch-all WebSocketServer on the same http.Server does n
   ws.close();
   dashboardDevice.close();
   await new Promise((resolve) => dashboardServer.close(resolve));
-});
-
-test('an upgrade request to an unrecognized path is rejected, not left hanging', async () => {
-  // Regression test: the dashboard's and device's 'upgrade' listeners each
-  // only act on their own path and otherwise return without touching the
-  // socket -- correct for letting the other one get a turn, but with
-  // nothing else registered, a genuinely unmatched path (typo, stray
-  // client) would be left open forever, since Node doesn't reject a
-  // handshake on its own just because *an* 'upgrade' listener exists.
-  const { WebSocketServer: WSS } = require('ws');
-  const stubServer = http.createServer();
-  const stubWss = new WSS({ noServer: true });
-  stubServer.on('upgrade', (req, socket, head) => {
-    if (req.url !== '/') return;
-    stubWss.handleUpgrade(req, socket, head, (ws) => stubWss.emit('connection', ws, req));
-  });
-  const stubDevice = attachDeviceSocket(stubServer, { broadcast: () => {} });
-  // The catch-all reject index.js registers alongside the two path-scoped
-  // listeners above -- see the matching comment there.
-  stubServer.on('upgrade', (req, socket) => {
-    if (req.url === '/' || req.url.startsWith('/ws/device')) return;
-    socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
-    socket.destroy();
-  });
-
-  await new Promise((resolve) => stubServer.listen(0, resolve));
-  const stubPort = stubServer.address().port;
-
-  const ws = new WebSocket(`ws://localhost:${stubPort}/not-a-real-path`);
-  const failure = await new Promise((resolve, reject) => {
-    ws.once('unexpected-response', (req, res) => resolve(res.statusCode));
-    ws.once('open', () => reject(new Error('expected the handshake to be rejected, not to succeed')));
-    // Belt and suspenders: if neither fires, this test times out loudly
-    // (via node --test's own timeout) rather than hanging silently forever,
-    // which is exactly the bug this guards against.
-  });
-
-  assert.equal(failure, 400);
-
-  stubDevice.close();
-  await new Promise((resolve) => stubServer.close(resolve));
 });
 
 test('a report with no issues is not stored or broadcast', async () => {

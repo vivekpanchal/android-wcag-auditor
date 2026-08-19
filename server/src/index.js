@@ -3,10 +3,10 @@ const cors = require('cors');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
-const { WebSocketServer } = require('ws');
 const store = require('./store');
 const { toCsv, toHtml } = require('./export');
 const { attachDeviceSocket } = require('./deviceSocket');
+const { createWsRouter } = require('./wsRouter');
 
 const PORT = process.env.PORT || 8080;
 
@@ -25,14 +25,10 @@ if (fs.existsSync(dashboardDist)) {
 }
 
 const server = http.createServer(app);
-// noServer + a manual path check, not { server } -- see the matching
-// comment in deviceSocket.js for why `ws`'s own `path` option doesn't
-// safely coexist with a second WebSocketServer on the same http.Server.
-const wss = new WebSocketServer({ noServer: true });
-server.on('upgrade', (req, socket, head) => {
-  if (req.url !== '/') return;
-  wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
-});
+// One router owns every WebSocket upgrade on this http.Server, routing by
+// path and rejecting anything unrecognized -- see wsRouter.js.
+const wsRouter = createWsRouter(server);
+const wss = wsRouter.route('/', { exact: true });
 
 function broadcast(msg) {
   const data = JSON.stringify(msg);
@@ -44,20 +40,7 @@ function broadcast(msg) {
 // The Auditor app's own connection to /ws/device is now the presence
 // signal — online means a socket is open, not "polled within the last N
 // seconds". See deviceSocket.js.
-const device = attachDeviceSocket(server, { broadcast });
-
-// Neither of the two listeners above touches a request for any other path
-// -- each only checks its own -- so without this, an upgrade request to an
-// unrecognized path (a typo, a stray client) would just hang: Node doesn't
-// reject a handshake on its own just because some 'upgrade' listener
-// exists. This always fires alongside them; harmless for '/' and
-// '/ws/device' since the socket is already handed off by the time this
-// runs for those.
-server.on('upgrade', (req, socket) => {
-  if (req.url === '/' || req.url.startsWith('/ws/device')) return;
-  socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
-  socket.destroy();
-});
+const device = attachDeviceSocket(wsRouter, { broadcast });
 
 wss.on('connection', (ws) => {
   ws.send(JSON.stringify({
