@@ -17,11 +17,7 @@ import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckPreset
-import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckResult.AccessibilityCheckResultType
-import com.google.android.apps.common.testing.accessibility.framework.AccessibilityHierarchyCheckResult
 import com.google.android.apps.common.testing.accessibility.framework.replacements.Rect
-import com.google.android.apps.common.testing.accessibility.framework.uielement.AccessibilityHierarchyAndroid
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,18 +28,19 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
-import java.util.Locale
 
 /**
  * Runs on every window/content change in the currently-targeted app, executes
  * ATF's accessibility checks against the visible node tree, and POSTs any
  * findings to the local dashboard server.
  *
- * The ATF integration (AccessibilityHierarchyAndroid.newBuilder/build,
+ * The actual ATF invocation (AccessibilityHierarchyAndroid.newBuilder/build,
  * AccessibilityCheckPreset.getAccessibilityHierarchyChecksForPreset,
- * AccessibilityHierarchyCheckResult field access) is verified against
- * accessibility-test-framework 4.1.1's actual compiled classes via javap —
- * this file compiles clean with that dependency.
+ * AccessibilityHierarchyCheckResult field access) lives in
+ * AtfHierarchyChecker.runAtfChecks — factored out so an instrumented test can
+ * run the identical check against fixture Activities without duplicating it.
+ * It's verified against accessibility-test-framework 4.1.1's actual compiled
+ * classes via javap — this file compiles clean with that dependency.
  */
 class AuditorAccessibilityService : AccessibilityService() {
 
@@ -190,40 +187,8 @@ class AuditorAccessibilityService : AccessibilityService() {
     // for a real crash. Upgrade path: benchmark on a worst-case screen, and
     // if it's actually slow, move hierarchy building + check execution to a
     // background dispatcher.
-    private fun checkHierarchy(root: AccessibilityNodeInfo): List<AuditIssue> {
-        val hierarchy = AccessibilityHierarchyAndroid.newBuilder(root, applicationContext).build()
-        val checks = AccessibilityCheckPreset.getAccessibilityHierarchyChecksForPreset(
-            AccessibilityCheckPreset.LATEST
-        )
-
-        val results = mutableListOf<AccessibilityHierarchyCheckResult>()
-        checks.forEach { check -> results.addAll(check.runCheckOnHierarchy(hierarchy)) }
-
-        return results
-            .filter { it.type == AccessibilityCheckResultType.ERROR || it.type == AccessibilityCheckResultType.WARNING }
-            .map { result ->
-                // result.sourceCheckClass / result.element are ATF's linkage back to
-                // which check fired and which node it fired on.
-                val checkClassName = result.sourceCheckClass?.simpleName ?: "Unknown"
-                val criterion = WcagMapping.forCheckClass(checkClassName)
-                val element = result.element
-                val bounds = element?.boundsInScreen?.takeUnless { it.isEmpty }
-                AuditIssue(
-                    severity = if (result.type == AccessibilityCheckResultType.ERROR) "serious" else "moderate",
-                    wcagSc = criterion.sc,
-                    wcagLevel = criterion.level,
-                    elementDescription = describeElement(element?.className, element?.resourceName),
-                    description = result.getMessage(Locale.getDefault())?.toString() ?: result.toString(),
-                    suggestedFix = null,
-                    bounds = bounds,
-                )
-            }
-    }
-
-    private fun describeElement(className: CharSequence?, resourceId: CharSequence?) =
-        listOfNotNull(className?.toString()?.substringAfterLast('.'), resourceId?.toString())
-            .joinToString(" ")
-            .ifBlank { "Unnamed element" }
+    private fun checkHierarchy(root: AccessibilityNodeInfo): List<AuditIssue> =
+        runAtfChecks(root, applicationContext)
 
     // wrapHardwareBuffer returns a HARDWARE-config bitmap, which is immutable —
     // it must be copied to a drawable config before a Canvas can touch it.

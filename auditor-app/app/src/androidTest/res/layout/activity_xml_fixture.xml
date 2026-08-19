@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Deliberately seeds two ATF-checkable violations, mirrored in Compose form
+  by ComposeFixtureActivity's @Composable content:
+    - noDescriptionImage: a clickable ImageButton with no contentDescription
+      -> ATF SpeakableTextPresentCheck -> WCAG 1.1.1
+    - smallTouchTarget: a 20dp clickable View (below the 48dp minimum) that
+      does have a name, so it only trips the size check, not the name one
+      -> ATF TouchTargetSizeCheck -> WCAG 2.5.5
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <ImageButton
+        android:id="@+id/noDescriptionImage"
+        android:layout_width="64dp"
+        android:layout_height="64dp"
+        android:src="@android:drawable/ic_menu_gallery" />
+
+    <View
+        android:id="@+id/smallTouchTarget"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:clickable="true"
+        android:focusable="true"
+        android:contentDescription="small target" />
+
+</LinearLayout>
