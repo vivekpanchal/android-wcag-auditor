@@ -7,6 +7,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -14,6 +17,7 @@ import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.google.android.apps.common.testing.accessibility.framework.replacements.Rect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -166,7 +170,10 @@ class AuditorAccessibilityService : AccessibilityService() {
         Log.d(TAG, "runAudit: ${issues.size} issue(s) on $screenName")
         if (issues.isEmpty()) return
 
-        captureScreenshot { png ->
+        // One screenshot is shared by every issue in this report (see
+        // ReportSender's rationale for not duplicating the PNG per issue), so
+        // draw every issue's box into that single image rather than picking one.
+        captureScreenshot(issues.mapNotNull { it.bounds }) { png ->
             sessionIssueCount.value += issues.size
             reportSender.send(targetPackage, screenName, issues, png)
         }
@@ -183,7 +190,32 @@ class AuditorAccessibilityService : AccessibilityService() {
     private fun checkHierarchy(root: AccessibilityNodeInfo): List<AuditIssue> =
         runAtfChecks(root, applicationContext)
 
-    private fun captureScreenshot(onResult: (ByteArray?) -> Unit) {
+    // wrapHardwareBuffer returns a HARDWARE-config bitmap, which is immutable —
+    // it must be copied to a drawable config before a Canvas can touch it.
+    // Skipped entirely when there's nothing to highlight, so the common case
+    // (no bounds) avoids the extra copy.
+    private fun drawHighlights(source: Bitmap, boundsToHighlight: List<Rect>): Bitmap {
+        if (boundsToHighlight.isEmpty()) return source
+        val mutable = source.copy(Bitmap.Config.ARGB_8888, true) ?: return source
+        val paint = Paint().apply {
+            color = Color.RED
+            style = Paint.Style.STROKE
+            strokeWidth = HIGHLIGHT_STROKE_WIDTH_DP * resources.displayMetrics.density
+        }
+        val canvas = Canvas(mutable)
+        boundsToHighlight.forEach { bounds ->
+            canvas.drawRect(
+                bounds.left.toFloat(),
+                bounds.top.toFloat(),
+                (bounds.left + bounds.width).toFloat(),
+                (bounds.top + bounds.height).toFloat(),
+                paint,
+            )
+        }
+        return mutable
+    }
+
+    private fun captureScreenshot(boundsToHighlight: List<Rect>, onResult: (ByteArray?) -> Unit) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             onResult(null)
             return
@@ -215,8 +247,9 @@ class AuditorAccessibilityService : AccessibilityService() {
                                 result.hardwareBuffer.close()
                             }
                             bitmap?.let {
+                                val annotated = drawHighlights(it, boundsToHighlight)
                                 val out = ByteArrayOutputStream()
-                                it.compress(Bitmap.CompressFormat.PNG, 100, out)
+                                annotated.compress(Bitmap.CompressFormat.PNG, 100, out)
                                 out.toByteArray()
                             }
                         } catch (e: Exception) {
@@ -250,6 +283,9 @@ class AuditorAccessibilityService : AccessibilityService() {
         const val KEY_IS_AUDITING = "is_auditing"
         const val KEY_LOCAL_INTENT_AT = "local_intent_at"
         private const val DEBOUNCE_MS = 600L
+        // dp, not raw px, so the box stays visually consistent across device
+        // densities instead of looking hairline-thin on high-density screens.
+        private const val HIGHLIGHT_STROKE_WIDTH_DP = 4f
         private const val CONTROL_POLL_MS = 3000L
         private const val LOCAL_INTENT_GRACE_MS = 2000L
 
