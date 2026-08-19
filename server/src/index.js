@@ -6,13 +6,9 @@ const fs = require('fs');
 const { WebSocketServer } = require('ws');
 const store = require('./store');
 const { toCsv, toHtml } = require('./export');
+const { attachDeviceSocket } = require('./deviceSocket');
 
 const PORT = process.env.PORT || 8080;
-// The Auditor service polls /control every 3s while its accessibility
-// service is enabled; two missed polls means it's gone (app closed,
-// service disabled, USB unplugged, adb reverse dropped, etc).
-const DEVICE_TIMEOUT_MS = 8000;
-let deviceOnline = false;
 
 const app = express();
 app.use(cors()); // still needed for `vite dev` on :5173 during dashboard development
@@ -29,7 +25,14 @@ if (fs.existsSync(dashboardDist)) {
 }
 
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+// noServer + a manual path check, not { server } -- see the matching
+// comment in deviceSocket.js for why `ws`'s own `path` option doesn't
+// safely coexist with a second WebSocketServer on the same http.Server.
+const wss = new WebSocketServer({ noServer: true });
+server.on('upgrade', (req, socket, head) => {
+  if (req.url !== '/') return;
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+});
 
 function broadcast(msg) {
   const data = JSON.stringify(msg);
@@ -38,23 +41,20 @@ function broadcast(msg) {
   }
 }
 
+// The Auditor app's own connection to /ws/device is now the presence
+// signal — online means a socket is open, not "polled within the last N
+// seconds". See deviceSocket.js.
+const device = attachDeviceSocket(server, { broadcast });
+
 wss.on('connection', (ws) => {
   ws.send(JSON.stringify({
     type: 'init',
     issues: store.getIssues(),
     control: store.getControl(),
     apps: store.getAppList(),
-    device: { online: deviceOnline, lastSeen: store.getDeviceLastSeen() },
+    device: { online: device.isOnline(), lastSeen: store.getDeviceLastSeen() },
   }));
 });
-
-setInterval(() => {
-  const lastSeen = store.getDeviceLastSeen();
-  const nowOnline = !!lastSeen && Date.now() - lastSeen < DEVICE_TIMEOUT_MS;
-  if (nowOnline === deviceOnline) return;
-  deviceOnline = nowOnline;
-  broadcast({ type: 'device', online: deviceOnline, lastSeen });
-}, 2000);
 
 app.post('/report', (req, res) => {
   const { packageName, issues } = req.body || {};
@@ -96,16 +96,15 @@ app.delete('/issues', (req, res) => {
   res.status(204).end();
 });
 
-// The device can't be pushed to (adb reverse only lets it reach us), so the
-// Auditor app polls GET /control; the dashboard sets desired state via POST.
-// This poll also doubles as the device's heartbeat — see /device below.
+// The Auditor app no longer polls this — control is pushed over /ws/device
+// the instant it changes (see deviceSocket.js). Left in place because the
+// dashboard still fetches it once on mount to seed its initial state.
 app.get('/control', (req, res) => {
-  store.touchDevice();
   res.json(store.getControl());
 });
 
 app.get('/device', (req, res) => {
-  res.json({ online: deviceOnline, lastSeen: store.getDeviceLastSeen() });
+  res.json({ online: device.isOnline(), lastSeen: store.getDeviceLastSeen() });
 });
 
 app.post('/control', (req, res) => {
@@ -116,10 +115,11 @@ app.post('/control', (req, res) => {
   if (auditing && !targetPackage) {
     return res.status(400).json({ error: 'targetPackage is required to start auditing' });
   }
-  if (auditing && !deviceOnline) {
+  if (auditing && !device.isOnline()) {
     return res.status(409).json({ error: 'device is not connected — cannot start auditing' });
   }
   const control = store.setControl({ targetPackage: targetPackage || null, auditing });
+  device.pushControl(control);
   broadcast({ type: 'control', control });
   res.json(control);
 });

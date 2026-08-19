@@ -20,20 +20,17 @@ import com.google.android.apps.common.testing.accessibility.framework.Accessibil
 import com.google.android.apps.common.testing.accessibility.framework.uielement.AccessibilityHierarchyAndroid
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 
 /**
  * Runs on every window/content change in the currently-targeted app, executes
- * ATF's accessibility checks against the visible node tree, and POSTs any
- * findings to the local dashboard server.
+ * ATF's accessibility checks against the visible node tree, and sends any
+ * findings to the local dashboard server over a persistent WebSocket
+ * (DeviceSocket, at /ws/device).
  *
  * The ATF integration (AccessibilityHierarchyAndroid.newBuilder/build,
  * AccessibilityCheckPreset.getAccessibilityHierarchyChecksForPreset,
@@ -41,78 +38,61 @@ import java.util.Locale
  * accessibility-test-framework 4.1.1's actual compiled classes via javap —
  * this file compiles clean with that dependency.
  */
-class AuditorAccessibilityService : AccessibilityService() {
+class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingAudit: Runnable? = null
-    private val reportSender = ReportSender()
-    private val controlSync = ControlSync()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var pollJob: Job? = null
+    private val deviceSocket = DeviceSocket(serviceScope, this)
     private lateinit var prefs: SharedPreferences
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         serviceRunning.value = true
-        pollJob = serviceScope.launch {
-            while (isActive) {
-                try {
-                    pollRemoteControl()
-                } catch (e: Exception) {
-                    // A malformed server response from ControlSync or a
-                    // SharedPreferences read/write hiccup here would otherwise
-                    // escape this coroutine — and SupervisorJob only stops that
-                    // failure from cancelling sibling coroutines, it does NOT
-                    // swallow the exception itself. Uncaught, it still reaches
-                    // Android's default UncaughtExceptionHandler and kills the
-                    // whole process even though this runs on Dispatchers.IO, not
-                    // the main thread. Log and keep polling next cycle instead.
-                    Log.e(TAG, "pollRemoteControl failed, will retry next cycle", e)
-                }
-                delay(CONTROL_POLL_MS)
-            }
-        }
+        deviceSocket.connect()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         serviceRunning.value = false
-        pollJob?.cancel()
+        deviceSocket.close()
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        deviceSocket.close()
         serviceScope.cancel()
         super.onDestroy()
     }
 
     /**
-     * Picks up target/auditing changes made from the dashboard. The device
-     * can't be pushed to (adb reverse is one-directional), so this is a poll.
-     * A no-op if the server isn't reachable — local control from the app's
-     * own UI keeps working standalone either way.
+     * Picks up target/auditing changes pushed from the server the instant
+     * the dashboard (or this device's own UI) changes them — see
+     * DeviceSocket. Runs on OkHttp's callback thread, not main; prefs
+     * writes and sessionIssueCount are both safe to touch off-main.
      */
-    private fun pollRemoteControl() {
-        // A local toggle in MainActivity writes prefs immediately (so it works
-        // even with no server), then pushes to the server in the background.
-        // If a poll lands in that gap, the server hasn't seen the change yet —
-        // applying its still-stale response here would silently revert the
-        // user's tap. Skip one cycle after a local change to let the push land;
-        // the grace window is shorter than the poll interval, so it costs at
-        // most a single skipped poll, not a lasting delay.
+    override fun onControl(targetPackage: String?, auditing: Boolean) {
+        // A local toggle in MainActivity writes prefs immediately (so it
+        // works even with no server), then pushes to the server in the
+        // background. If a push from the server lands in that gap — e.g.
+        // this exact change echoed back before the local write settles, or
+        // a stale one racing it — applying it here could re-derive the
+        // same state (harmless) or, in a genuine concurrent-change race,
+        // clobber the user's tap. Skip one window after a local change to
+        // let it settle; costs at most a brief delay picking up a
+        // genuinely concurrent remote change, not a lasting one.
         val lastLocalIntent = prefs.getLong(KEY_LOCAL_INTENT_AT, 0)
         if (System.currentTimeMillis() - lastLocalIntent < LOCAL_INTENT_GRACE_MS) return
 
-        val remote = controlSync.fetchControl() ?: return
         val wasAuditing = prefs.getBoolean(KEY_IS_AUDITING, false)
         val currentTarget = prefs.getString(KEY_TARGET_PACKAGE, null)
-        if (remote.auditing == wasAuditing && remote.targetPackage == currentTarget) return
+        if (auditing == wasAuditing && targetPackage == currentTarget) return
 
-        Log.i(TAG, "remote control changed: auditing=${remote.auditing} target=${remote.targetPackage}")
-        if (remote.auditing && !wasAuditing) sessionIssueCount.value = 0
+        Log.i(TAG, "remote control changed: auditing=$auditing target=$targetPackage")
+        if (auditing && !wasAuditing) sessionIssueCount.value = 0
         prefs.edit()
-            .putString(KEY_TARGET_PACKAGE, remote.targetPackage)
-            .putBoolean(KEY_IS_AUDITING, remote.auditing)
+            .putString(KEY_TARGET_PACKAGE, targetPackage)
+            .putBoolean(KEY_IS_AUDITING, auditing)
             .apply()
     }
 
@@ -171,7 +151,7 @@ class AuditorAccessibilityService : AccessibilityService() {
 
         captureScreenshot { png ->
             sessionIssueCount.value += issues.size
-            reportSender.send(targetPackage, screenName, issues, png)
+            deviceSocket.sendReport(targetPackage, screenName, issues, png)
         }
     }
 
@@ -238,8 +218,8 @@ class AuditorAccessibilityService : AccessibilityService() {
                         // already recycled. Either way, degrade to no-screenshot rather
                         // than kill the whole session over a missing image. Scoped to
                         // just the conversion (not onResult itself) so a failure further
-                        // downstream in the caller's callback — e.g. ReportSender — isn't
-                        // misreported as a screenshot failure and double-delivered.
+                        // downstream in the caller's callback — e.g. DeviceSocket.sendReport —
+                        // isn't misreported as a screenshot failure and double-delivered.
                         val png = try {
                             val bitmap = try {
                                 Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
@@ -285,7 +265,6 @@ class AuditorAccessibilityService : AccessibilityService() {
         const val KEY_IS_AUDITING = "is_auditing"
         const val KEY_LOCAL_INTENT_AT = "local_intent_at"
         private const val DEBOUNCE_MS = 600L
-        private const val CONTROL_POLL_MS = 3000L
         private const val LOCAL_INTENT_GRACE_MS = 2000L
 
         val serviceRunning = MutableStateFlow(false)

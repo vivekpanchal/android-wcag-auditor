@@ -17,7 +17,8 @@ yours or someone else's, doesn't matter.
 │  unmodified)      │                            │ ATF checks    │
 └─────────────────┘                            │ + screenshot   │
                                                  └──────┬───────┘
-                                                        │ HTTP POST (adb reverse)
+                                                        │ persistent WebSocket
+                                                        │ (adb reverse)
                                                         ▼
                                           ┌──────────────────────┐
                                           │  Node server :8080    │
@@ -34,23 +35,26 @@ events from *that* package only (everything else, including itself, is ignored).
 grabs the current `AccessibilityNodeInfo` tree, runs it through Google's
 [Accessibility Test Framework](https://github.com/google/Accessibility-Test-Framework-for-Android)
 (ATF), maps each finding to a WCAG 2.1 success criterion (see `auditor-app/.../WcagMapping.kt`),
-optionally grabs a screenshot, and POSTs the result to the local server, which fans it out to the
-dashboard over a WebSocket.
+optionally grabs a screenshot, and sends the result up a persistent WebSocket to the local server
+(`DeviceSocket`, connected to `/ws/device`), which fans it out to the dashboard over its own
+WebSocket.
 
-**Controlling from the dashboard:** `adb reverse` only lets the device reach the server, not the
-other way around, so remote control is a poll, not a push. The dashboard POSTs desired
-target/auditing state to `POST /control`; the Auditor app's service polls `GET /control` every 3s
-and applies whatever it finds. Starting/stopping from the device's own UI pushes to the same
-endpoint, so both stay in sync regardless of which one changed it last. The server is the single
-source of truth for auditing state, but the app degrades gracefully to device-only operation if
-the server isn't reachable (fetches just return nothing, control stays local).
+**Controlling from the dashboard:** the same `/ws/device` connection carries control the other
+way too. The dashboard POSTs desired target/auditing state to `POST /control`; the server pushes
+it straight down the Auditor app's open socket the instant it changes — no poll, no delay.
+Starting/stopping from the device's own UI POSTs to the same `/control` endpoint, so both stay in
+sync regardless of which one changed it last. The server is the single source of truth for
+auditing state, but the app degrades gracefully to device-only operation if the server isn't
+reachable (the socket just keeps retrying in the background, control stays local until it
+reconnects).
 
-**Device connection status:** the same 3s `/control` poll doubles as a heartbeat — the server marks
-the device offline after ~8s of silence (two missed polls) and broadcasts the change over
-WebSocket. The dashboard shows a live "device connected/disconnected" indicator and refuses to
-start an audit while offline, both in the UI (Start is disabled) and server-side
-(`POST /control` with `auditing: true` 409s if no device has been seen recently) — so you can't
-accidentally "start" an audit that has no device to run on.
+**Device connection status:** the `/ws/device` connection *is* the presence signal — the server
+marks the device online the instant it connects and offline the instant the socket closes (a
+missed WebSocket ping/pong catches a silent drop, e.g. Wi-Fi/USB dropping without a clean close),
+and broadcasts the change over the dashboard's WebSocket immediately. The dashboard shows a live
+"device connected/disconnected" indicator and refuses to start an audit while offline, both in the
+UI (Start is disabled) and server-side (`POST /control` with `auditing: true` 409s if no device is
+connected) — so you can't accidentally "start" an audit that has no device to run on.
 
 **App picker:** the Auditor app POSTs its installed-apps list to `POST /apps` on every
 `onResume` (not just cold start, so a missed push — server not up yet, a network blip — heals
