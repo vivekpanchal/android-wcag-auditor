@@ -6,14 +6,6 @@ export function severityRank(s) {
   return { critical: 0, serious: 1, moderate: 2, minor: 3 }[s] ?? 4;
 }
 
-// Case-insensitive match against name or package, sorted alphabetically by name.
-export function matchApps(apps, query) {
-  const q = query.trim().toLowerCase();
-  return apps
-    .filter((a) => !q || a.appName.toLowerCase().includes(q) || a.packageName.toLowerCase().includes(q))
-    .sort((a, b) => a.appName.localeCompare(b.appName));
-}
-
 export function filterIssues(issues, { severityFilter, levelFilter, screenFilter, search }) {
   const q = search.trim().toLowerCase();
   return issues

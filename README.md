@@ -56,11 +56,19 @@ and broadcasts the change over the dashboard's WebSocket immediately. The dashbo
 UI (Start is disabled) and server-side (`POST /control` with `auditing: true` 409s if no device is
 connected) — so you can't accidentally "start" an audit that has no device to run on.
 
-**App picker:** the Auditor app POSTs its installed-apps list to `POST /apps` on every
-`onResume` (not just cold start, so a missed push — server not up yet, a network blip — heals
-itself the next time you switch back to the app instead of requiring a relaunch). The dashboard's
-target field is a search box with a dropdown of matching apps (name + package), still lets you
-type a package name directly if the app hasn't reported in yet.
+**Picking a target:** the target app is chosen on the phone, not in the dashboard — the Auditor
+app's own list shows every launchable app with its icon, name, and package, tap one to select it.
+The dashboard is read-only about the target: it displays whatever's currently selected (resolved
+to an app name if the phone has reported one, else just the package) and lets you Start/Stop, but
+doesn't let you change *which* app that is. The phone still POSTs its installed-apps list to
+`POST /apps` on every `onResume` (not just cold start, so a missed push — server not up yet, a
+network blip — heals itself next time you switch back to the app), purely so the dashboard can
+show a friendlier name than a bare package string.
+
+**Connection control:** a Settings button on the main screen opens a screen that lets you manually
+disconnect or reconnect the `/ws/device` socket without disabling the accessibility service
+entirely — useful if you want the service watching for events but don't want it talking to a
+server right now. The choice persists across restarts of the service.
 
 ## Project layout
 
@@ -130,18 +138,20 @@ app can just POST to `http://localhost:8080/report` without knowing your machine
 
 ### 5. Pick a target and go
 
-Either works — they stay in sync (see "Controlling from the dashboard" above):
+The target app is always chosen on the phone — the dashboard can Start/Stop remotely, but doesn't
+change *which* app is being audited.
 
-**From the phone:**
+**On the phone:**
 1. Open the A11y Auditor app.
-2. Pick the app you want audited from the list (or type its package name manually), e.g.
-   `com.example.myapp`.
-3. Tap **Start Auditing**.
+2. Pick the app you want audited from the list (icon, name, and package for each installed app),
+   or type its package name manually, e.g. `com.example.myapp`.
+3. Tap **Start Auditing** — or leave it selected and start from the dashboard instead (see below).
 
-**From the dashboard** (`http://localhost:8080`) — no need to touch the phone at all once the
-service is enabled:
-1. Type the target package name into the control bar at the top.
-2. Click **Start Auditing**. The phone picks it up within a few seconds.
+**From the dashboard** (`http://localhost:8080`) — once a target is selected on the phone, no
+need to touch the phone again to start/stop:
+1. Confirm the target shown in the control bar matches what you picked on the phone.
+2. Click **Start Auditing**. The phone picks it up instantly over the persistent WebSocket
+   connection, not a poll.
 
 Then, either way:
 4. Switch to the target app on the device and use it normally — navigate screens, open dialogs,

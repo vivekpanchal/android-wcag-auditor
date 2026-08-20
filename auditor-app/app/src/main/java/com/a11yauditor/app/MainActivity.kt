@@ -49,6 +49,10 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
 
+        binding.settingsButton.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
         binding.startStopButton.setOnClickListener { toggleAuditing() }
 
         observeIssueCount()
@@ -133,7 +137,7 @@ class MainActivity : AppCompatActivity() {
             .map { it.activityInfo }
             .filter { it.packageName != packageName }
             .distinctBy { it.packageName }
-            .map { InstalledAppInfo(it.loadLabel(packageManager).toString(), it.packageName) }
+            .map { InstalledAppInfo(it.loadLabel(packageManager).toString(), it.packageName, it.loadIcon(packageManager)) }
             .sortedBy { it.appName.lowercase() }
             .toList()
     }

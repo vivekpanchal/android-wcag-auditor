@@ -49,20 +49,42 @@ class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener
     override fun onServiceConnected() {
         super.onServiceConnected()
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        instance = this
         serviceRunning.value = true
-        deviceSocket.connect()
+        // Off by default only if the Settings screen was used to turn it off
+        // in a previous session — persists a manual disconnect across the
+        // service restarting (accessibility re-enabled, phone reboot, etc).
+        if (prefs.getBoolean(KEY_SOCKET_ENABLED, true)) deviceSocket.connect()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         serviceRunning.value = false
+        instance = null
         deviceSocket.close()
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        instance = null
         deviceSocket.close()
         serviceScope.cancel()
         super.onDestroy()
+    }
+
+    /** Manual override from the Settings screen — see SettingsActivity. */
+    fun connectDeviceSocket() {
+        prefs.edit().putBoolean(KEY_SOCKET_ENABLED, true).apply()
+        deviceSocket.connect()
+    }
+
+    /** Manual override from the Settings screen — see SettingsActivity. */
+    fun disconnectDeviceSocket() {
+        prefs.edit().putBoolean(KEY_SOCKET_ENABLED, false).apply()
+        deviceSocket.close()
+    }
+
+    override fun onConnectionChange(connected: Boolean) {
+        deviceSocketConnected.value = connected
     }
 
     /**
@@ -265,9 +287,18 @@ class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener
         const val PREFS_NAME = "a11y_auditor_prefs"
         const val KEY_TARGET_PACKAGE = "target_package"
         const val KEY_IS_AUDITING = "is_auditing"
+        const val KEY_SOCKET_ENABLED = "socket_enabled"
         private const val DEBOUNCE_MS = 600L
 
         val serviceRunning = MutableStateFlow(false)
         val sessionIssueCount = MutableStateFlow(0)
+        val deviceSocketConnected = MutableStateFlow(false)
+
+        // The system only ever runs one instance of an AccessibilityService at
+        // a time, so a plain nullable reference is enough to let SettingsActivity
+        // reach the live instance without a bindService() dance -- null means
+        // the service isn't currently running.
+        var instance: AuditorAccessibilityService? = null
+            private set
     }
 }

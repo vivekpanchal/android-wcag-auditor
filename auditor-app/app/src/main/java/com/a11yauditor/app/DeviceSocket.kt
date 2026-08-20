@@ -14,6 +14,7 @@ import okhttp3.WebSocketListener
 
 interface DeviceSocketListener {
     fun onControl(targetPackage: String?, auditing: Boolean)
+    fun onConnectionChange(connected: Boolean)
 }
 
 /**
@@ -49,6 +50,11 @@ class DeviceSocket(
         reconnectJob?.cancel()
         socket?.close(NORMAL_CLOSURE_CODE, "service stopping")
         socket = null
+        // Reported synchronously here, not left to onClosed() -- that OkHttp
+        // callback is asynchronous (a real close handshake takes a moment),
+        // and a manual disconnect should read as disconnected immediately
+        // rather than lagging behind the actual socket teardown.
+        listener.onConnectionChange(false)
     }
 
     fun sendReport(packageName: String, screen: String?, issues: List<AuditIssue>, screenshotPng: ByteArray?) {
@@ -75,6 +81,7 @@ class DeviceSocket(
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.i(TAG, "device socket connected")
+                listener.onConnectionChange(true)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -84,6 +91,7 @@ class DeviceSocket(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "device socket closed: $code $reason")
+                listener.onConnectionChange(false)
                 scheduleReconnect()
             }
 
@@ -93,6 +101,7 @@ class DeviceSocket(
                 // alike — either way, keep retrying rather than giving up
                 // the audit session over a transient failure.
                 Log.w(TAG, "device socket failed: ${t.message}")
+                listener.onConnectionChange(false)
                 scheduleReconnect()
             }
         })
