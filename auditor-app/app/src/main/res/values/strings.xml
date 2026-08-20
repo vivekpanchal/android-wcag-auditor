@@ -11,6 +11,9 @@
     <string name="status_service_enabled">Accessibility service is ON</string>
     <string name="status_no_target">No target app selected</string>
     <string name="label_issue_count">Issues found this session: %1$d</string>
+    <string name="label_connection_connected">Dashboard: connected</string>
+    <string name="label_connection_disconnected">Dashboard: reconnecting… findings are held locally until it\'s back</string>
+    <string name="toast_started_while_disconnected">Auditing started, but not connected to the dashboard yet — it\'ll catch up automatically, no need to redo this.</string>
 
     <string name="btn_settings">Settings</string>
     <string name="settings_title">Connection</string>

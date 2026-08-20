@@ -61,6 +61,14 @@
         android:textSize="16sp"
         tools:text="Issues found this session: 0" />
 
+    <TextView
+        android:id="@+id/connectionStatusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="13sp"
+        tools:text="Dashboard: connected" />
+
     <Button
         android:id="@+id/startStopButton"
         android:layout_width="match_parent"
