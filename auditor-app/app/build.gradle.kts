@@ -59,4 +59,11 @@ dependencies {
     implementation(libs.guava)
 
     testImplementation(libs.junit)
+    // Local unit tests run on a plain JVM against android.jar stubs, which
+    // throw at runtime for org.json.* (only Android's real implementation
+    // is usable, not the stub) -- DeviceProtocolTest exercises real
+    // JSONObject/JSONArray, so it needs a working implementation on the
+    // test classpath. Same artifact android.jar's org.json is originally
+    // vendored from.
+    testImplementation(libs.json)
 }
