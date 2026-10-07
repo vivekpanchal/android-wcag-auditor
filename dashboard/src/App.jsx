@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import './App.css';
-import { matchApps, filterIssues, groupIssues } from './logic';
+import { filterIssues, groupIssues } from './logic';
 
 const SERVER = 'http://localhost:8080';
 const WS_URL = 'ws://localhost:8080';
@@ -68,10 +68,8 @@ export default function App() {
   const [issues, setIssues] = useState([]);
   const [connected, setConnected] = useState(false);
   const [control, setControl] = useState({ targetPackage: null, auditing: false });
-  const [targetInput, setTargetInput] = useState('');
   const [controlBusy, setControlBusy] = useState(false);
   const [apps, setApps] = useState([]);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const [deviceOnline, setDeviceOnline] = useState(false);
   const [severityFilter, setSeverityFilter] = useState('all');
   const [levelFilter, setLevelFilter] = useState('all');
@@ -81,10 +79,7 @@ export default function App() {
 
   useEffect(() => {
     fetch(`${SERVER}/issues`).then((r) => r.json()).then(setIssues).catch(() => {});
-    fetch(`${SERVER}/control`).then((r) => r.json()).then((c) => {
-      setControl(c);
-      if (c.targetPackage) setTargetInput(c.targetPackage);
-    }).catch(() => {});
+    fetch(`${SERVER}/control`).then((r) => r.json()).then(setControl).catch(() => {});
     fetch(`${SERVER}/apps`).then((r) => r.json()).then(setApps).catch(() => {});
     fetch(`${SERVER}/device`).then((r) => r.json()).then((d) => setDeviceOnline(d.online)).catch(() => {});
 
@@ -122,7 +117,13 @@ export default function App() {
     };
   }, []);
 
-  const matchedApps = useMemo(() => matchApps(apps, targetInput), [apps, targetInput]);
+  // The dashboard no longer picks the target — that's chosen on the phone,
+  // in the Auditor app's own app list — so this is purely for a friendlier
+  // display of whatever control.targetPackage the phone last set.
+  const targetApp = useMemo(
+    () => apps.find((a) => a.packageName === control.targetPackage),
+    [apps, control.targetPackage]
+  );
 
   const screens = useMemo(() => [...new Set(issues.map((i) => i.screen).filter(Boolean))], [issues]);
 
@@ -146,14 +147,13 @@ export default function App() {
 
   const toggleAuditing = async () => {
     const nextAuditing = !control.auditing;
-    const pkg = targetInput.trim();
-    if (nextAuditing && (!pkg || !deviceOnline)) return;
+    if (nextAuditing && (!control.targetPackage || !deviceOnline)) return;
     setControlBusy(true);
     try {
       const res = await fetch(`${SERVER}/control`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetPackage: nextAuditing ? pkg : control.targetPackage, auditing: nextAuditing }),
+        body: JSON.stringify({ targetPackage: control.targetPackage, auditing: nextAuditing }),
       });
       if (res.ok) setControl(await res.json());
     } finally {
@@ -183,49 +183,29 @@ export default function App() {
       </header>
 
       <section className="control-bar">
-        <div className="app-picker">
-          <input
-            className="target-input"
-            type="text"
-            placeholder={deviceOnline ? 'Search apps or type a package name…' : 'Connect a device to pick a target'}
-            value={targetInput}
-            onChange={(e) => setTargetInput(e.target.value)}
-            onFocus={() => setPickerOpen(true)}
-            onBlur={() => setTimeout(() => setPickerOpen(false), 150)}
-            disabled={control.auditing}
-          />
-          {pickerOpen && !control.auditing && (
-            <div className="app-picker-dropdown">
-              {apps.length === 0 && (
-                <div className="app-picker-empty">No apps reported yet — open the Auditor app on your phone.</div>
-              )}
-              {apps.length > 0 && matchedApps.length === 0 && (
-                <div className="app-picker-empty">No apps match "{targetInput}".</div>
-              )}
-              {matchedApps.map((a) => (
-                <div
-                  key={a.packageName}
-                  className="app-picker-option"
-                  onMouseDown={() => setTargetInput(a.packageName)}
-                >
-                  <span className="app-picker-name">{a.appName}</span>
-                  <span className="app-picker-package">{a.packageName}</span>
-                </div>
-              ))}
-            </div>
+        <div className="target-display">
+          <span className="target-display-label">Target</span>
+          {control.targetPackage ? (
+            <span className="target-display-value">
+              <span className="target-app-name">{targetApp ? targetApp.appName : control.targetPackage}</span>
+              {targetApp && <span className="target-app-package">{control.targetPackage}</span>}
+            </span>
+          ) : (
+            <span className="target-display-empty">None picked yet — choose one in the Auditor app on your phone.</span>
           )}
         </div>
         <button
           className={`btn btn-primary ${control.auditing ? 'btn-danger' : ''}`}
           onClick={toggleAuditing}
-          disabled={controlBusy || (!control.auditing && (!targetInput.trim() || !deviceOnline))}
+          disabled={controlBusy || (!control.auditing && (!control.targetPackage || !deviceOnline))}
         >
           {control.auditing ? 'Stop Auditing' : 'Start Auditing'}
         </button>
         <p className="control-status">
           {!deviceOnline && !control.auditing && 'No device connected — open the Auditor app on your phone with the accessibility service enabled.'}
-          {deviceOnline && !control.auditing && 'Not auditing — pick a target and hit Start.'}
-          {control.auditing && <>Auditing <code>{control.targetPackage}</code> — the phone picks this up within a few seconds{!deviceOnline && ' (device currently unreachable — issues won\'t flow until it reconnects)'}</>}
+          {deviceOnline && !control.auditing && control.targetPackage && 'Not auditing — hit Start when ready.'}
+          {deviceOnline && !control.auditing && !control.targetPackage && 'Pick a target app on your phone, then hit Start.'}
+          {control.auditing && <>Auditing <code>{control.targetPackage}</code>{!deviceOnline && ' (device currently unreachable — issues won\'t flow until it reconnects)'}</>}
         </p>
       </section>
 

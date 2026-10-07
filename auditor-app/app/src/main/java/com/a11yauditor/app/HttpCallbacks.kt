@@ -7,7 +7,9 @@ import okhttp3.Response
 import java.io.IOException
 
 /**
- * Fire-and-forget POST callback shared by ReportSender and ControlSync.
+ * Fire-and-forget POST callback used by ControlSync's HTTP calls (the
+ * device's own locally-initiated writes — /ws/device's WebSocket traffic
+ * uses its own WebSocketListener, not this).
  * OkHttp only calls onFailure for network-level errors — a non-2xx response
  * (validation failure, 413 too-large, etc.) lands in onResponse and would
  * otherwise be closed and forgotten, making delivery failures invisible.

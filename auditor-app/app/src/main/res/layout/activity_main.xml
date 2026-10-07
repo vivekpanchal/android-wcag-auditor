@@ -22,6 +22,14 @@
         android:layout_marginTop="8dp"
         android:text="@string/btn_enable_service" />
 
+    <Button
+        android:id="@+id/settingsButton"
+        style="?attr/materialButtonOutlinedStyle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/btn_settings" />
+
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -52,6 +60,14 @@
         android:layout_marginTop="12dp"
         android:textSize="16sp"
         tools:text="Issues found this session: 0" />
+
+    <TextView
+        android:id="@+id/connectionStatusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="13sp"
+        tools:text="Dashboard: connected" />
 
     <Button
         android:id="@+id/startStopButton"

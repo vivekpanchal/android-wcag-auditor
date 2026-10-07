@@ -28,6 +28,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="@string/btn_settings" />
+
         <service
             android:name=".AuditorAccessibilityService"
             android:exported="true"

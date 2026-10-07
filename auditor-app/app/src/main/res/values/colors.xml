@@ -3,4 +3,6 @@
     <color name="purple_500">#6750A4</color>
     <color name="purple_700">#4F378B</color>
     <color name="white">#FFFFFF</color>
+    <color name="status_connected">#2E7D32</color>
+    <color name="status_disconnected">#B00020</color>
 </resources>
