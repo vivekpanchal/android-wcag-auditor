@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, fireEvent } from '@testing-library/react';
 import App, { ScreenshotWithHighlight } from './App';
-import { severityRank, matchApps, filterIssues, groupIssues } from './logic';
+import { severityRank, filterIssues, groupIssues } from './logic';
 
 describe('severityRank', () => {
   it('ranks known severities from critical (most severe) to minor', () => {
@@ -71,30 +71,6 @@ describe('groupIssues', () => {
     ];
     const grouped = groupIssues(issues);
     expect(grouped.get('Home').map((i) => i.id)).toEqual([2, 3, 1]);
-  });
-});
-
-describe('matchApps', () => {
-  const apps = [
-    { appName: 'Zeta', packageName: 'com.zeta.app' },
-    { appName: 'Alpha', packageName: 'com.alpha.app' },
-    { appName: 'Beta Notes', packageName: 'com.example.beta' },
-  ];
-
-  it('returns all apps sorted alphabetically by name when query is empty', () => {
-    expect(matchApps(apps, '').map((a) => a.appName)).toEqual(['Alpha', 'Beta Notes', 'Zeta']);
-  });
-
-  it('matches case-insensitively against appName', () => {
-    expect(matchApps(apps, 'zeta').map((a) => a.appName)).toEqual(['Zeta']);
-  });
-
-  it('matches case-insensitively against packageName', () => {
-    expect(matchApps(apps, 'COM.EXAMPLE').map((a) => a.appName)).toEqual(['Beta Notes']);
-  });
-
-  it('sorts matched results alphabetically', () => {
-    expect(matchApps(apps, 'com.').map((a) => a.appName)).toEqual(['Alpha', 'Beta Notes', 'Zeta']);
   });
 });
 
@@ -230,5 +206,50 @@ describe('App WebSocket "issues" message handling', () => {
       ws.onmessage({ data: JSON.stringify({ type: 'clear' }) });
     });
     expect(document.querySelector('.stat-total .stat-value').textContent).toBe('0');
+  });
+});
+
+describe('App target display (chosen on the phone, not the dashboard)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('shows a prompt to pick a target on the phone, and disables Start, when none is set yet', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal(
+      'fetch',
+      mockFetchJson({
+        '/issues': [],
+        '/control': { targetPackage: null, auditing: false },
+        '/apps': [],
+        '/device': { online: true },
+      })
+    );
+
+    render(<App />);
+    await act(async () => {});
+
+    expect(screen.getByText(/choose one in the Auditor app on your phone/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /start auditing/i })).toBeDisabled();
+  });
+
+  it('resolves the target package to its app name once the phone has reported the app list', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal(
+      'fetch',
+      mockFetchJson({
+        '/issues': [],
+        '/control': { targetPackage: 'com.example.wellness', auditing: false },
+        '/apps': [{ appName: 'Wellness', packageName: 'com.example.wellness' }],
+        '/device': { online: true },
+      })
+    );
+
+    render(<App />);
+    await act(async () => {});
+
+    expect(screen.getByText('Wellness')).toBeTruthy();
+    expect(screen.getByText('com.example.wellness')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /start auditing/i })).not.toBeDisabled();
   });
 });

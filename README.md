@@ -17,7 +17,8 @@ yours or someone else's, doesn't matter.
 │  unmodified)      │                            │ ATF checks    │
 └─────────────────┘                            │ + screenshot   │
                                                  └──────┬───────┘
-                                                        │ HTTP POST (adb reverse)
+                                                        │ persistent WebSocket
+                                                        │ (adb reverse)
                                                         ▼
                                           ┌──────────────────────┐
                                           │  Node server :8080    │
@@ -34,29 +35,40 @@ events from *that* package only (everything else, including itself, is ignored).
 grabs the current `AccessibilityNodeInfo` tree, runs it through Google's
 [Accessibility Test Framework](https://github.com/google/Accessibility-Test-Framework-for-Android)
 (ATF), maps each finding to a WCAG 2.1 success criterion (see `auditor-app/.../WcagMapping.kt`),
-optionally grabs a screenshot, and POSTs the result to the local server, which fans it out to the
-dashboard over a WebSocket.
+optionally grabs a screenshot, and sends the result up a persistent WebSocket to the local server
+(`DeviceSocket`, connected to `/ws/device`), which fans it out to the dashboard over its own
+WebSocket.
 
-**Controlling from the dashboard:** `adb reverse` only lets the device reach the server, not the
-other way around, so remote control is a poll, not a push. The dashboard POSTs desired
-target/auditing state to `POST /control`; the Auditor app's service polls `GET /control` every 3s
-and applies whatever it finds. Starting/stopping from the device's own UI pushes to the same
-endpoint, so both stay in sync regardless of which one changed it last. The server is the single
-source of truth for auditing state, but the app degrades gracefully to device-only operation if
-the server isn't reachable (fetches just return nothing, control stays local).
+**Controlling from the dashboard:** the same `/ws/device` connection carries control the other
+way too. The dashboard POSTs desired target/auditing state to `POST /control`; the server pushes
+it straight down the Auditor app's open socket the instant it changes — no poll, no delay.
+Starting/stopping from the device's own UI POSTs to the same `/control` endpoint, so both stay in
+sync regardless of which one changed it last. The server is the single source of truth for
+auditing state, but the app degrades gracefully to device-only operation if the server isn't
+reachable (the socket just keeps retrying in the background, control stays local until it
+reconnects).
 
-**Device connection status:** the same 3s `/control` poll doubles as a heartbeat — the server marks
-the device offline after ~8s of silence (two missed polls) and broadcasts the change over
-WebSocket. The dashboard shows a live "device connected/disconnected" indicator and refuses to
-start an audit while offline, both in the UI (Start is disabled) and server-side
-(`POST /control` with `auditing: true` 409s if no device has been seen recently) — so you can't
-accidentally "start" an audit that has no device to run on.
+**Device connection status:** the `/ws/device` connection *is* the presence signal — the server
+marks the device online the instant it connects and offline the instant the socket closes (a
+missed WebSocket ping/pong catches a silent drop, e.g. Wi-Fi/USB dropping without a clean close),
+and broadcasts the change over the dashboard's WebSocket immediately. The dashboard shows a live
+"device connected/disconnected" indicator and refuses to start an audit while offline, both in the
+UI (Start is disabled) and server-side (`POST /control` with `auditing: true` 409s if no device is
+connected) — so you can't accidentally "start" an audit that has no device to run on.
 
-**App picker:** the Auditor app POSTs its installed-apps list to `POST /apps` on every
-`onResume` (not just cold start, so a missed push — server not up yet, a network blip — heals
-itself the next time you switch back to the app instead of requiring a relaunch). The dashboard's
-target field is a search box with a dropdown of matching apps (name + package), still lets you
-type a package name directly if the app hasn't reported in yet.
+**Picking a target:** the target app is chosen on the phone, not in the dashboard — the Auditor
+app's own list shows every launchable app with its icon, name, and package, tap one to select it.
+The dashboard is read-only about the target: it displays whatever's currently selected (resolved
+to an app name if the phone has reported one, else just the package) and lets you Start/Stop, but
+doesn't let you change *which* app that is. The phone still POSTs its installed-apps list to
+`POST /apps` on every `onResume` (not just cold start, so a missed push — server not up yet, a
+network blip — heals itself next time you switch back to the app), purely so the dashboard can
+show a friendlier name than a bare package string.
+
+**Connection control:** a Settings button on the main screen opens a screen that lets you manually
+disconnect or reconnect the `/ws/device` socket without disabling the accessibility service
+entirely — useful if you want the service watching for events but don't want it talking to a
+server right now. The choice persists across restarts of the service.
 
 ## Project layout
 
@@ -126,18 +138,20 @@ app can just POST to `http://localhost:8080/report` without knowing your machine
 
 ### 5. Pick a target and go
 
-Either works — they stay in sync (see "Controlling from the dashboard" above):
+The target app is always chosen on the phone — the dashboard can Start/Stop remotely, but doesn't
+change *which* app is being audited.
 
-**From the phone:**
+**On the phone:**
 1. Open the A11y Auditor app.
-2. Pick the app you want audited from the list (or type its package name manually), e.g.
-   `com.example.myapp`.
-3. Tap **Start Auditing**.
+2. Pick the app you want audited from the list (icon, name, and package for each installed app),
+   or type its package name manually, e.g. `com.example.myapp`.
+3. Tap **Start Auditing** — or leave it selected and start from the dashboard instead (see below).
 
-**From the dashboard** (`http://localhost:8080`) — no need to touch the phone at all once the
-service is enabled:
-1. Type the target package name into the control bar at the top.
-2. Click **Start Auditing**. The phone picks it up within a few seconds.
+**From the dashboard** (`http://localhost:8080`) — once a target is selected on the phone, no
+need to touch the phone again to start/stop:
+1. Confirm the target shown in the control bar matches what you picked on the phone.
+2. Click **Start Auditing**. The phone picks it up instantly over the persistent WebSocket
+   connection, not a poll.
 
 Then, either way:
 4. Switch to the target app on the device and use it normally — navigate screens, open dialogs,

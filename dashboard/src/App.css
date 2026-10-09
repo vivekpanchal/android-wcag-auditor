@@ -76,7 +76,7 @@
   font-weight: 600;
 }
 
-/* --- Control bar: target picker + start/stop --- */
+/* --- Control bar: target display (picked on the phone) + start/stop --- */
 
 .control-bar {
   display: flex;
@@ -90,62 +90,40 @@
   margin-bottom: 1rem;
 }
 
-.app-picker {
-  position: relative;
+.target-display {
   flex: 1;
   min-width: 240px;
-}
-
-.target-input {
-  width: 100%;
-  padding: 0.5rem 0.7rem;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--page-plane);
-  color: var(--text-primary);
-  font: inherit;
-}
-
-.target-input:disabled {
-  color: var(--text-secondary);
-}
-
-.app-picker-dropdown {
-  position: absolute;
-  top: calc(100% + 0.3rem);
-  left: 0;
-  right: 0;
-  max-height: 280px;
-  overflow-y: auto;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-  z-index: 5;
-}
-
-.app-picker-option {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.5rem 0.7rem;
-  cursor: pointer;
+  gap: 0.5rem;
 }
 
-.app-picker-option:hover {
-  background: var(--page-plane);
+.target-display-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  flex: none;
 }
 
-.app-picker-name {
-  font-size: 0.9rem;
+.target-display-value {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.target-app-name {
+  font-size: 0.95rem;
+  font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.app-picker-package {
+.target-app-package {
   font-size: 0.75rem;
   color: var(--text-secondary);
   white-space: nowrap;
@@ -153,9 +131,8 @@
   text-overflow: ellipsis;
 }
 
-.app-picker-empty {
-  padding: 0.6rem 0.7rem;
-  font-size: 0.8rem;
+.target-display-empty {
+  font-size: 0.85rem;
   color: var(--text-secondary);
 }
 
