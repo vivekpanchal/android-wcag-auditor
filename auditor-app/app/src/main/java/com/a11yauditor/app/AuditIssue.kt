@@ -8,7 +8,9 @@ data class AuditIssue(
     val wcagLevel: String,
     val elementDescription: String,
     val description: String,
-    val suggestedFix: String?,
+    val fix: WcagMapping.Fix?,
+    // "views" or "compose", so the dashboard shows the matching fix snippet first.
+    val framework: String,
     // Screen-pixel bounds of the flagged element, same coordinate space as
     // the report's screenshot — lets the dashboard draw a highlight box on
     // the image.

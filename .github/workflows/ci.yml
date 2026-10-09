@@ -42,9 +42,7 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
-      # No Gradle wrapper jar is committed (see README) — provision Gradle
-      # directly instead of relying on ./gradlew.
+      # Caching only; the version comes from the committed wrapper.
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: 8.7
-      - run: gradle testDebugUnitTest assembleDebug
+      # `bash gradlew` so the script runs even if its exec bit was lost on a Windows commit.
+      - run: bash gradlew testDebugUnitTest assembleDebug

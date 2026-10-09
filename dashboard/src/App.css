@@ -311,10 +311,33 @@
 }
 
 .issue-fix {
-  margin: 0 0 0.25rem;
+  margin: 0.4rem 0 0.25rem;
   font-size: 0.8rem;
-  font-style: italic;
   color: var(--text-secondary);
+}
+
+.issue-fix summary {
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.issue-fix a {
+  color: var(--link);
+}
+
+.fix-snippet-label {
+  margin: 0.5rem 0 0.2rem;
+  font-weight: 600;
+}
+
+.fix-snippet pre {
+  margin: 0;
+  padding: 0.5rem;
+  overflow-x: auto;
+  background: var(--page-plane);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.75rem;
 }
 
 .issue-thumb-wrap {

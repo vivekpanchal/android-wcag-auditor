@@ -26,3 +26,24 @@ export function groupIssues(filtered) {
   for (const list of map.values()) list.sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
   return map;
 }
+
+// suggestedFix is a JSON string {summary, views, compose, docUrl, framework}
+// from the device. Older rows hold plain text, shown as the summary.
+export function parseFix(raw) {
+  if (!raw) return null;
+  try {
+    const fix = JSON.parse(raw);
+    // Keep only string fields: anything on localhost can send reports, and a
+    // non-string here would crash rendering.
+    if (fix && typeof fix.summary === 'string' && fix.summary) {
+      return Object.fromEntries(
+        ['summary', 'views', 'compose', 'docUrl', 'framework']
+          .filter((k) => typeof fix[k] === 'string')
+          .map((k) => [k, fix[k]])
+      );
+    }
+  } catch {
+    // plain text, handled below
+  }
+  return { summary: String(raw) };
+}

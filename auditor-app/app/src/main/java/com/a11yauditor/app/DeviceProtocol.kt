@@ -36,7 +36,17 @@ object DeviceProtocol {
                         put("wcagLevel", issue.wcagLevel)
                         put("elementDescription", issue.elementDescription)
                         put("description", issue.description)
-                        issue.suggestedFix?.let { put("suggestedFix", it) }
+                        // Sent as a JSON string in the existing suggestedFix field, so the
+                        // server stores it unchanged; the dashboard parses it.
+                        issue.fix?.let { fix ->
+                            put("suggestedFix", JSONObject().apply {
+                                put("summary", fix.summary)
+                                put("views", fix.views)
+                                put("compose", fix.compose)
+                                put("docUrl", fix.docUrl)
+                                put("framework", issue.framework)
+                            }.toString())
+                        }
                         issue.bounds?.let {
                             put("bounds", JSONObject().apply {
                                 put("x", it.left)

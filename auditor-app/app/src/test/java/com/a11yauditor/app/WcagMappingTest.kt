@@ -1,6 +1,9 @@
 package com.a11yauditor.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -28,7 +31,7 @@ class WcagMappingTest {
         )
 
         for ((checkClass, criterion) in expected) {
-            assertEquals(checkClass, criterion, WcagMapping.forCheckClass(checkClass))
+            assertEquals(checkClass, criterion, WcagMapping.forCheckClass(checkClass).copy(fix = null))
         }
     }
 
@@ -37,5 +40,23 @@ class WcagMappingTest {
         val result = WcagMapping.forCheckClass("SomeCompletelyMadeUpCheckName")
 
         assertEquals(WcagMapping.Criterion("N/A", "-", "Unmapped check"), result)
+    }
+
+    @Test
+    fun `every mapped check has complete fix guidance`() {
+        assertEquals(14, WcagMapping.checkClasses.size)
+        for (checkClass in WcagMapping.checkClasses) {
+            val fix = WcagMapping.forCheckClass(checkClass).fix
+            assertNotNull("$checkClass has no fix", fix)
+            listOf(fix!!.summary, fix.views, fix.compose, fix.docUrl).forEach {
+                assertTrue("$checkClass has a blank fix field", it.isNotBlank())
+            }
+            assertTrue("$checkClass docUrl must be https", fix.docUrl.startsWith("https://"))
+        }
+    }
+
+    @Test
+    fun `unmapped check has no fix`() {
+        assertNull(WcagMapping.forCheckClass("SomeCompletelyMadeUpCheckName").fix)
     }
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, fireEvent } from '@testing-library/react';
 import App, { ScreenshotWithHighlight } from './App';
-import { severityRank, filterIssues, groupIssues } from './logic';
+import { severityRank, filterIssues, groupIssues, parseFix } from './logic';
 
 describe('severityRank', () => {
   it('ranks known severities from critical (most severe) to minor', () => {
@@ -251,5 +251,92 @@ describe('App target display (chosen on the phone, not the dashboard)', () => {
     expect(screen.getByText('Wellness')).toBeTruthy();
     expect(screen.getByText('com.example.wellness')).toBeTruthy();
     expect(screen.getByRole('button', { name: /start auditing/i })).not.toBeDisabled();
+  });
+});
+
+describe('parseFix', () => {
+  it('parses the structured fix JSON from the device', () => {
+    const raw = JSON.stringify({ summary: 'S', views: 'V', compose: 'C', docUrl: 'https://x', framework: 'compose' });
+    expect(parseFix(raw)).toEqual({ summary: 'S', views: 'V', compose: 'C', docUrl: 'https://x', framework: 'compose' });
+  });
+
+  it('treats legacy plain text as the summary', () => {
+    expect(parseFix('Add a label')).toEqual({ summary: 'Add a label' });
+  });
+
+  it('drops non-string fields so a hostile payload cannot crash rendering', () => {
+    const raw = JSON.stringify({ summary: 'S', views: { a: 1 }, compose: 'C', docUrl: 42, framework: 'compose' });
+    expect(parseFix(raw)).toEqual({ summary: 'S', compose: 'C', framework: 'compose' });
+  });
+
+  it('treats a non-string summary as unparseable', () => {
+    const raw = JSON.stringify({ summary: { a: 1 } });
+    expect(parseFix(raw)).toEqual({ summary: raw });
+  });
+
+  it('returns null for missing fixes', () => {
+    expect(parseFix(null)).toBeNull();
+    expect(parseFix('')).toBeNull();
+  });
+});
+
+describe('App fix guidance', () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal(
+      'fetch',
+      mockFetchJson({
+        '/issues': [],
+        '/control': { targetPackage: null, auditing: false },
+        '/apps': [],
+        '/device': { online: false },
+      })
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const showIssue = async (suggestedFix) => {
+    render(<App />);
+    await act(async () => {});
+    act(() => {
+      FakeWebSocket.instances[0].onmessage({
+        data: JSON.stringify({
+          type: 'issues',
+          issues: [{ id: 1, timestamp: 1, severity: 'serious', elementDescription: 'Btn', description: 'd', suggestedFix }],
+        }),
+      });
+    });
+  };
+
+  it('shows the detected framework snippet first and links https docs', async () => {
+    await showIssue(JSON.stringify({
+      summary: 'Make it 48dp', views: 'android:minHeight="48dp"', compose: 'Modifier.minimumInteractiveComponentSize()',
+      docUrl: 'https://developer.android.com/guide/topics/ui/accessibility/apps', framework: 'compose',
+    }));
+
+    expect(screen.getByText(/How to fix: Make it 48dp/)).toBeInTheDocument();
+    const labels = [...document.querySelectorAll('.fix-snippet-label')].map((el) => el.textContent);
+    expect(labels).toEqual(['Compose (detected)', 'Views']);
+    expect(screen.getByRole('link', { name: 'Android docs' })).toHaveAttribute('href', 'https://developer.android.com/guide/topics/ui/accessibility/apps');
+  });
+
+  it('puts Views first when the element is a View', async () => {
+    await showIssue(JSON.stringify({ summary: 'S', views: 'V', compose: 'C', docUrl: 'https://x', framework: 'views' }));
+    const labels = [...document.querySelectorAll('.fix-snippet-label')].map((el) => el.textContent);
+    expect(labels).toEqual(['Views (detected)', 'Compose']);
+  });
+
+  it('never renders a non-https doc link', async () => {
+    await showIssue(JSON.stringify({ summary: 'S', views: 'V', compose: 'C', docUrl: 'javascript:alert(1)', framework: 'views' }));
+    expect(screen.queryByRole('link', { name: 'Android docs' })).toBeNull();
+  });
+
+  it('shows a legacy plain-text fix as the summary', async () => {
+    await showIssue('Add a content description');
+    expect(screen.getByText(/How to fix: Add a content description/)).toBeInTheDocument();
   });
 });

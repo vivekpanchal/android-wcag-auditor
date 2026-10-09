@@ -32,12 +32,13 @@ yours or someone else's, doesn't matter.
 The Auditor app registers an `AccessibilityService`. Once a target package + Start is set — from
 the app's own UI, or from the dashboard (see below) — the service watches for window/content-change
 events from *that* package only (everything else, including itself, is ignored). On each change it
-grabs the current `AccessibilityNodeInfo` tree, runs it through Google's
+grabs every window that belongs to the target app (the activity plus any dialog,
+bottom sheet or popup on top of it), runs each through Google's
 [Accessibility Test Framework](https://github.com/google/Accessibility-Test-Framework-for-Android)
-(ATF), maps each finding to a WCAG 2.1 success criterion (see `auditor-app/.../WcagMapping.kt`),
-optionally grabs a screenshot, and sends the result up a persistent WebSocket to the local server
-(`DeviceSocket`, connected to `/ws/device`), which fans it out to the dashboard over its own
-WebSocket.
+(ATF), labels dialog/popup issues as `Activity › Title`, maps each finding to a WCAG 2.1 success
+criterion (see `auditor-app/.../WcagMapping.kt`), optionally grabs a screenshot, and sends the
+result up a persistent WebSocket to the local server (`DeviceSocket`, connected to `/ws/device`),
+which fans it out to the dashboard over its own WebSocket.
 
 **Controlling from the dashboard:** the same `/ws/device` connection carries control the other
 way too. The dashboard POSTs desired target/auditing state to `POST /control`; the server pushes
@@ -176,6 +177,10 @@ WCAG 2.1 success criterion + level (e.g. `TouchTargetSizeCheck` → 2.5.5 AAA,
 check's simple class name — everything downstream (server, dashboard) already handles arbitrary
 SC/level values.
 
+Each mapped check also carries fix guidance (`WcagMapping.Fix`): a one-line summary, a Views
+snippet, a Compose snippet and a docs link. The service detects whether the flagged element sits
+under a Compose host and the dashboard shows that framework's snippet first.
+
 This mapping isn't guessed from check class names — it's cross-checked against ATF 4.1.1's actual
 source (class docs + the literal threshold constants it enforces, e.g. `ContrastUtils.
 CONTRAST_RATIO_WCAG_NORMAL_TEXT = 4.5`, which is exactly the 1.4.3 AA threshold). Two honest caveats
@@ -193,9 +198,8 @@ accessibility-test-framework 4.1.1 classes (via `javap`), not just written again
 fix that took was adding an explicit `com.google.guava:guava` dependency, since ATF's public API
 returns Guava collection types without exposing Guava transitively.
 
-The Gradle wrapper jar itself isn't committed (binary, wasn't practical to generate from this
-tool). Opening the project in Android Studio regenerates it automatically on sync; from the
-command line, run `gradle wrapper` once with any local Gradle install first.
+The Gradle wrapper is committed (`auditor-app/gradlew`, pinned by `distributionSha256Sum`), so
+`./gradlew` works from a fresh clone with only a JDK installed.
 
 ## Privacy
 

@@ -3,9 +3,11 @@ package com.a11yauditor.app
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityService.ScreenshotResult
 import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Handler
@@ -14,6 +16,7 @@ import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckPreset
 import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckResult.AccessibilityCheckResultType
 import com.google.android.apps.common.testing.accessibility.framework.AccessibilityHierarchyCheckResult
@@ -42,6 +45,8 @@ class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingAudit: Runnable? = null
+    // Target Activity and its window id; a modal dialog hides that window from getWindows(), so index 0 isn't always the activity.
+    private val baseScreen = BaseScreenTracker()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val deviceSocket = DeviceSocket(serviceScope, this)
     private lateinit var prefs: SharedPreferences
@@ -110,6 +115,7 @@ class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener
             if (auditing == wasAuditing && targetPackage == currentTarget) return
 
             Log.i(TAG, "remote control changed: auditing=$auditing target=$targetPackage")
+            mainHandler.post { baseScreen.reset() }
             if (auditing && !wasAuditing) sessionIssueCount.value = 0
             prefs.edit()
                 .putString(KEY_TARGET_PACKAGE, targetPackage)
@@ -132,14 +138,23 @@ class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener
         try {
             val targetPackage = prefs.getString(KEY_TARGET_PACKAGE, null) ?: return
             val auditing = prefs.getBoolean(KEY_IS_AUDITING, false)
-            if (!auditing) return
-            if (event.packageName?.toString() != targetPackage) return
+            if (!auditing) {
+                baseScreen.reset()
+                return
+            }
+            val isWindowsChanged = event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+            if (!ScreenNaming.shouldScan(event.packageName?.toString(), isWindowsChanged, targetPackage)) return
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                event.className?.toString()
+                    ?.takeIf { isActivity(targetPackage, it) }
+                    ?.let { baseScreen.onActivity(targetPackage, it, event.windowId) }
+            }
 
             // Content-changed events fire rapidly while a screen settles (layout
             // passes, animations, etc). Debounce so we audit once the screen is
             // actually still, not on every intermediate frame.
             pendingAudit?.let { mainHandler.removeCallbacks(it) }
-            val runnable = Runnable { runAudit(targetPackage, event.className?.toString()) }
+            val runnable = Runnable { runAudit(targetPackage) }
             pendingAudit = runnable
             mainHandler.postDelayed(runnable, DEBOUNCE_MS)
         } catch (e: Exception) {
@@ -149,34 +164,77 @@ class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener
 
     override fun onInterrupt() {}
 
-    private fun runAudit(targetPackage: String, screenName: String?) {
-        val root = rootInActiveWindow
-        if (root == null) {
-            Log.d(TAG, "runAudit: rootInActiveWindow is null, skipping")
-            return
-        }
-        // The debounce delay means the foreground app can change between the
-        // event that scheduled this and now (user switched away, a system
-        // dialog took focus, etc). Re-check so we never audit or screenshot
-        // a different app than the one the user selected as the target.
-        if (root.packageName?.toString() != targetPackage) {
-            Log.d(TAG, "runAudit: foreground changed away from $targetPackage, skipping")
-            return
-        }
-
-        val issues = try {
-            checkHierarchy(root)
+    private fun runAudit(targetPackage: String) {
+        // Runs from a main-Handler Runnable: an OEM getWindows() quirk or a window
+        // torn down mid-read must skip this pass, not kill the service.
+        try {
+            auditWindows(targetPackage)
         } catch (e: Exception) {
-            Log.e(TAG, "ATF check run failed", e)
-            emptyList()
+            Log.e(TAG, "runAudit failed, skipping this pass", e)
         }
-        Log.d(TAG, "runAudit: ${issues.size} issue(s) on $screenName")
-        if (issues.isEmpty()) return
+    }
+
+    private fun auditWindows(targetPackage: String) {
+        // Re-selected here, not at event time: the debounce means the foreground
+        // can change in between, and only target-app windows are ever audited
+        // or screenshotted.
+        val targetWindows = currentTargetWindows(targetPackage)
+        if (targetWindows.isEmpty()) {
+            Log.d(TAG, "runAudit: no $targetPackage windows on screen, skipping")
+            return
+        }
+        val activity = baseScreen.activityFor(targetPackage)
+        val baseId = baseScreen.windowIdFor(targetPackage)
+
+        // One ATF run per window so a failure in one (e.g. a popup mid-dismiss)
+        // doesn't drop the others, and each dialog/popup gets its own screen label.
+        val perWindow = targetWindows.mapIndexedNotNull { index, window ->
+            val issues = try {
+                checkHierarchy(window.root)
+            } catch (e: Exception) {
+                Log.e(TAG, "ATF check run failed on window '${window.title}'", e)
+                emptyList()
+            }
+            if (issues.isEmpty()) null
+            else ScreenNaming.screenLabel(activity, window, isBase = ScreenNaming.isBase(window, index, baseId)) to issues
+        }
+        Log.d(TAG, "runAudit: ${perWindow.sumOf { it.second.size }} issue(s) across ${targetWindows.size} window(s)")
+        if (perWindow.isEmpty()) return
 
         captureScreenshot { png ->
-            sessionIssueCount.value += issues.size
-            deviceSocket.sendReport(targetPackage, screenName, issues, png)
+            perWindow.forEach { (label, issues) ->
+                sessionIssueCount.value += issues.size
+                deviceSocket.sendReport(targetPackage, label, issues, png)
+            }
         }
+    }
+
+    /** Target-app windows, activity first; falls back to rootInActiveWindow if the window list is unavailable. */
+    private fun currentTargetWindows(targetPackage: String): List<TargetWindow<AccessibilityNodeInfo>> {
+        val all = windows.mapNotNull { w ->
+            val root = w.root ?: return@mapNotNull null
+            TargetWindow(
+                packageName = root.packageName?.toString(),
+                isApplication = w.type == AccessibilityWindowInfo.TYPE_APPLICATION,
+                layer = w.layer,
+                title = w.title?.toString(),
+                rootClassName = root.className?.toString(),
+                root = root,
+                id = w.id,
+            )
+        }
+        val selected = ScreenNaming.targetWindows(all, targetPackage)
+        if (selected.isNotEmpty()) return selected
+        val active = rootInActiveWindow ?: return emptyList()
+        if (active.packageName?.toString() != targetPackage) return emptyList()
+        return listOf(TargetWindow(targetPackage, true, 0, null, active.className?.toString(), active))
+    }
+
+    private fun isActivity(pkg: String, className: String): Boolean = try {
+        packageManager.getActivityInfo(ComponentName(pkg, className), 0)
+        true
+    } catch (e: PackageManager.NameNotFoundException) {
+        false
     }
 
     // ponytail: runs synchronously on the main thread (called from the
@@ -211,7 +269,8 @@ class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener
                     wcagLevel = criterion.level,
                     elementDescription = describeElement(element?.className, element?.resourceName),
                     description = result.getMessage(Locale.getDefault())?.toString() ?: result.toString(),
-                    suggestedFix = null,
+                    fix = criterion.fix,
+                    framework = frameworkFor(generateSequence(element) { it.parentView }.map { it.className }),
                     bounds = bounds,
                 )
             }

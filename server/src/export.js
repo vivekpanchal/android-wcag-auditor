@@ -9,9 +9,40 @@ function csvField(s) {
   return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
+// suggestedFix is a JSON string {summary, views, compose, docUrl, framework}
+// from the device. Older rows hold plain text, shown as the summary.
+// Same contract as dashboard/src/logic.js parseFix; this copy goes away when
+// export moves into the dashboard (Phase 2).
+function parseFix(raw) {
+  if (!raw) return null;
+  try {
+    const fix = JSON.parse(raw);
+    // Keep only string fields: anything on localhost can send reports, and a
+    // non-string here would crash rendering.
+    if (fix && typeof fix.summary === 'string' && fix.summary) {
+      return Object.fromEntries(
+        ['summary', 'views', 'compose', 'docUrl', 'framework']
+          .filter((k) => typeof fix[k] === 'string')
+          .map((k) => [k, fix[k]])
+      );
+    }
+  } catch {
+    // plain text, handled below
+  }
+  return { summary: String(raw) };
+}
+
+function fixHtml(fix) {
+  if (!fix) return '';
+  const code = fix.framework === 'compose' ? fix.compose : fix.views;
+  const docs = typeof fix.docUrl === 'string' && fix.docUrl.startsWith('https://')
+    ? `<p><a href="${escapeHtml(fix.docUrl)}">Android docs</a></p>` : '';
+  return `<div class="fix"><p><strong>How to fix:</strong> ${escapeHtml(fix.summary)}</p>${code ? `<pre><code>${escapeHtml(code)}</code></pre>` : ''}${docs}</div>`;
+}
+
 function toCsv(issues) {
   const header = ['id', 'packageName', 'screen', 'timestamp', 'severity', 'wcagSC', 'wcagLevel', 'elementDescription', 'description', 'suggestedFix'];
-  const rows = issues.map((i) => header.map((h) => csvField(i[h])).join(','));
+  const rows = issues.map((i) => header.map((h) => csvField(h === 'suggestedFix' ? parseFix(i[h])?.summary : i[h])).join(','));
   return [header.join(','), ...rows].join('\n');
 }
 
@@ -36,7 +67,7 @@ function toHtml(issues) {
           </div>
           <p class="element"><strong>Element:</strong> ${escapeHtml(i.elementDescription)}</p>
           <p class="description">${escapeHtml(i.description)}</p>
-          ${i.suggestedFix ? `<p class="fix"><strong>Suggested fix:</strong> ${escapeHtml(i.suggestedFix)}</p>` : ''}
+          ${fixHtml(parseFix(i.suggestedFix))}
           ${i.screenshot ? `
           <div class="screenshot-wrap">
             <img class="screenshot" src="data:image/png;base64,${i.screenshot}" alt="Screenshot of ${escapeHtml(i.elementDescription)}" />
@@ -70,6 +101,7 @@ function toHtml(issues) {
   .timestamp { color: #999; font-size: 0.8rem; }
   .screenshot-wrap { position: relative; display: inline-block; overflow: hidden; margin-top: 0.5rem; }
   .screenshot { max-width: 300px; display: block; border: 1px solid #ccc; }
+  .fix pre { background: #f5f5f5; padding: 0.5rem; overflow-x: auto; font-size: 0.8rem; }
   .screenshot-highlight { position: absolute; border: 2px solid #d32f2f; box-shadow: 0 0 0 9999px rgba(211, 47, 47, 0.18); pointer-events: none; }
 </style>
 </head>

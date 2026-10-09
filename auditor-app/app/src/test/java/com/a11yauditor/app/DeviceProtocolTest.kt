@@ -21,7 +21,8 @@ class DeviceProtocolTest {
                 wcagLevel = "AA",
                 elementDescription = "TextView subtitle",
                 description = "Contrast 2.1:1",
-                suggestedFix = null,
+                fix = null,
+                framework = "views",
             ),
             AuditIssue(
                 severity = "moderate",
@@ -29,7 +30,8 @@ class DeviceProtocolTest {
                 wcagLevel = "A",
                 elementDescription = "ImageView icon",
                 description = "No accessible name",
-                suggestedFix = "Add a contentDescription",
+                fix = WcagMapping.Fix("Add a label", "views-snippet", "compose-snippet", "https://example.com/doc"),
+                framework = "compose",
             ),
         )
 
@@ -53,12 +55,18 @@ class DeviceProtocolTest {
         assertEquals(2, issuesJson.length())
         assertEquals("1.4.3", issuesJson.getJSONObject(0).getString("wcagSC"))
         assertEquals(false, issuesJson.getJSONObject(0).has("suggestedFix"))
-        assertEquals("Add a contentDescription", issuesJson.getJSONObject(1).getString("suggestedFix"))
+        // suggestedFix is a JSON string so the server stores it unchanged and the dashboard parses it.
+        val fix = JSONObject(issuesJson.getJSONObject(1).getString("suggestedFix"))
+        assertEquals("Add a label", fix.getString("summary"))
+        assertEquals("views-snippet", fix.getString("views"))
+        assertEquals("compose-snippet", fix.getString("compose"))
+        assertEquals("https://example.com/doc", fix.getString("docUrl"))
+        assertEquals("compose", fix.getString("framework"))
     }
 
     @Test
     fun `buildReportMessage includes the screenshot field only when present`() {
-        val issue = AuditIssue("serious", "1.4.3", "AA", "Text", "Low contrast", null)
+        val issue = AuditIssue("serious", "1.4.3", "AA", "Text", "Low contrast", null, "views")
 
         val withScreenshot = JSONObject(
             DeviceProtocol.buildReportMessage("com.example.app", null, 1L, listOf(issue), "base64data")

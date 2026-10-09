@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import './App.css';
-import { filterIssues, groupIssues } from './logic';
+import { filterIssues, groupIssues, parseFix } from './logic';
 
 const SERVER = 'http://localhost:8080';
 const WS_URL = 'ws://localhost:8080';
@@ -36,6 +36,29 @@ export function ScreenshotWithHighlight({ screenshot, bounds, alt, wrapClassName
   );
 }
 
+function FixPanel({ fix }) {
+  if (!fix) return null;
+  const snippets = [
+    { key: 'compose', label: 'Compose', code: fix.compose },
+    { key: 'views', label: 'Views', code: fix.views },
+  ].filter((s) => s.code);
+  if (fix.framework !== 'compose') snippets.reverse();
+  return (
+    <details className="issue-fix">
+      <summary>How to fix: {fix.summary}</summary>
+      {snippets.map((s) => (
+        <div key={s.key} className="fix-snippet">
+          <p className="fix-snippet-label">{s.label}{s.key === fix.framework && ' (detected)'}</p>
+          <pre><code>{s.code}</code></pre>
+        </div>
+      ))}
+      {fix.docUrl?.startsWith('https://') && (
+        <a href={fix.docUrl} target="_blank" rel="noreferrer">Android docs</a>
+      )}
+    </details>
+  );
+}
+
 function IssueCard({ issue, onShowScreenshot }) {
   return (
     <div className={`issue-card severity-${issue.severity || 'unknown'}`}>
@@ -49,7 +72,7 @@ function IssueCard({ issue, onShowScreenshot }) {
       </div>
       <p className="issue-element"><strong>{issue.elementDescription}</strong></p>
       <p className="issue-description">{issue.description}</p>
-      {issue.suggestedFix && <p className="issue-fix">Fix: {issue.suggestedFix}</p>}
+      <FixPanel fix={parseFix(issue.suggestedFix)} />
       {issue.screenshot && (
         <ScreenshotWithHighlight
           screenshot={issue.screenshot}
