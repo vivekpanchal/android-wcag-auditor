@@ -8,3 +8,7 @@ node_modules/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Scratch output from the deep-research skill — not project source
+research_notes/
+reports/
