@@ -38,10 +38,12 @@ class AuditStore(
         screenshot: ByteArray?,
         issues: List<AuditIssue>,
     ): List<StoredIssue> {
-        shotsDir.mkdirs()
-        val file = screenshot?.let { "${UUID.randomUUID()}.webp".also { n -> File(shotsDir, n).writeBytes(it) } }
+        if (issues.isEmpty()) return emptyList()
         val db = writableDatabase
-        val out = try {
+        shotsDir.mkdirs()
+        val file = screenshot?.let { "${UUID.randomUUID()}.webp" }
+        var out = try {
+            if (file != null) File(shotsDir, file).writeBytes(screenshot)
             db.beginTransaction()
             try {
                 issues.map { i ->
@@ -70,7 +72,8 @@ class AuditStore(
             file?.let { File(shotsDir, it).delete() }
             throw e
         }
-        enforceCap(db)
+        val evicted = enforceCap(db)
+        if (file in evicted) out = out.map { it.copy(screenshotFile = null) }
         return out
     }
 
@@ -101,21 +104,25 @@ class AuditStore(
     fun screenshot(name: String): File? =
         if (SHOT_NAME.matches(name)) File(shotsDir, name).takeIf { it.isFile } else null
 
-    private fun enforceCap(db: SQLiteDatabase) {
+    /** Returns the screenshot names it deleted. */
+    private fun enforceCap(db: SQLiteDatabase): Set<String> {
         var total = shotsDir.listFiles()?.sumOf { it.length() } ?: 0L
-        if (total <= capBytes) return
+        if (total <= capBytes) return emptySet()
         val names = db.rawQuery(
             "SELECT screenshotFile FROM issues WHERE screenshotFile IS NOT NULL " +
                 "GROUP BY screenshotFile ORDER BY MIN(id)",
             null,
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+        val evicted = mutableSetOf<String>()
         for (n in names) {
             if (total <= capBytes) break
+            evicted += n
             val f = File(shotsDir, n)
             total -= f.length()
             f.delete()
             db.execSQL("UPDATE issues SET screenshotFile = NULL WHERE screenshotFile = ?", arrayOf(n))
         }
+        return evicted
     }
 
     private companion object {

@@ -69,4 +69,27 @@ class AuditStoreTest {
     @Test fun `screenshot rejects names outside the shots dir`() {
         assertNull(store.screenshot("../audit.db")); assertNull(store.screenshot("x.png"))
     }
+
+    @Test fun `failed insert leaves no screenshot file`() {
+        store.writableDatabase.execSQL("DROP TABLE issues")  // inserts now throw
+        try {
+            store.addReport("p", "S", 1, ByteArray(10), listOf(issue("a")))
+            org.junit.Assert.fail("expected throw")
+        } catch (e: android.database.SQLException) {
+        }
+        assertEquals(0, shotsDir.listFiles()!!.size)
+    }
+
+    @Test fun `screenshot larger than cap is evicted and rows report null`() {
+        val out = store.addReport("p", "S", 1, ByteArray(300), listOf(issue("a")))
+        assertNull(out[0].screenshotFile)
+        assertEquals(out, store.issues())
+        assertEquals(0, shotsDir.listFiles()!!.size)
+    }
+
+    @Test fun `screenshot returns written file and rejects non-webp names`() {
+        val out = store.addReport("p", "S", 1, ByteArray(10), listOf(issue("a")))
+        assertNotNull(store.screenshot(out[0].screenshotFile!!))
+        assertNull(store.screenshot(out[0].screenshotFile!!.replace(".webp", ".png")))
+    }
 }
