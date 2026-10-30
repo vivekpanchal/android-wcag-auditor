@@ -66,4 +66,5 @@ dependencies {
     // test classpath. Same artifact android.jar's org.json is originally
     // vendored from.
     testImplementation(libs.json)
+    testImplementation(libs.robolectric)
 }
