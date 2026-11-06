@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import { filterIssues, groupIssues, parseFix } from './logic';
-
-const SERVER = 'http://localhost:8080';
-const WS_URL = 'ws://localhost:8080';
+import { API, AuthError, apiFetch, authFromUrl } from './api';
+import { download, toCsv, toHtml } from './export';
 
 const SEVERITIES = ['critical', 'serious', 'moderate', 'minor'];
 
@@ -11,13 +10,13 @@ const SEVERITIES = ['critical', 'serious', 'moderate', 'minor'];
 // Android accessibility service reads them in), so the highlight box is
 // positioned as a percentage of the image's natural size — no separate
 // screen-size field needed from the device.
-export function ScreenshotWithHighlight({ screenshot, bounds, alt, wrapClassName, imgClassName, onClick }) {
+export function ScreenshotWithHighlight({ src, bounds, alt, wrapClassName, imgClassName, onClick }) {
   const [natural, setNatural] = useState(null);
   return (
     <div className={wrapClassName} onClick={onClick}>
       <img
         className={imgClassName}
-        src={`data:image/png;base64,${screenshot}`}
+        src={src}
         alt={alt}
         onLoad={(e) => setNatural({ w: e.target.naturalWidth, h: e.target.naturalHeight })}
       />
@@ -73,9 +72,9 @@ function IssueCard({ issue, onShowScreenshot }) {
       <p className="issue-element"><strong>{issue.elementDescription}</strong></p>
       <p className="issue-description">{issue.description}</p>
       <FixPanel fix={parseFix(issue.suggestedFix)} />
-      {issue.screenshot && (
+      {issue.screenshotUrl && (
         <ScreenshotWithHighlight
-          screenshot={issue.screenshot}
+          src={issue.screenshotUrl}
           bounds={issue.bounds}
           alt={`Screenshot: ${issue.elementDescription}`}
           wrapClassName="issue-thumb-wrap"
@@ -89,56 +88,89 @@ function IssueCard({ issue, onShowScreenshot }) {
 
 export default function App() {
   const [issues, setIssues] = useState([]);
-  const [connected, setConnected] = useState(false);
   const [control, setControl] = useState({ targetPackage: null, auditing: false });
   const [controlBusy, setControlBusy] = useState(false);
   const [apps, setApps] = useState([]);
-  const [deviceOnline, setDeviceOnline] = useState(false);
+  const [streamUp, setStreamUp] = useState(true); // true until proven down, so the banner doesn't flash
+  const [authFailed, setAuthFailed] = useState(false);
+  const authFailedRef = useRef(false); // the effect closure would see stale state
+  const streamedRef = useRef([]);
+  const clearGenRef = useRef(0);
   const [severityFilter, setSeverityFilter] = useState('all');
   const [levelFilter, setLevelFilter] = useState('all');
   const [screenFilter, setScreenFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [lightbox, setLightbox] = useState(null);
 
-  useEffect(() => {
-    fetch(`${SERVER}/issues`).then((r) => r.json()).then(setIssues).catch(() => {});
-    fetch(`${SERVER}/control`).then((r) => r.json()).then(setControl).catch(() => {});
-    fetch(`${SERVER}/apps`).then((r) => r.json()).then(setApps).catch(() => {});
-    fetch(`${SERVER}/device`).then((r) => r.json()).then((d) => setDeviceOnline(d.online)).catch(() => {});
-
-    let ws;
-    let retryTimer;
-    const connect = () => {
-      ws = new WebSocket(WS_URL);
-      ws.onopen = () => setConnected(true);
-      ws.onclose = () => {
-        setConnected(false);
-        retryTimer = setTimeout(connect, 2000);
-      };
-      ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'init') {
-          setIssues(msg.issues);
-          if (msg.control) setControl(msg.control);
-          if (msg.apps) setApps(msg.apps);
-          if (msg.device) setDeviceOnline(msg.device.online);
-        } else if (msg.type === 'issues') {
-          setIssues((prev) => {
-            const seen = new Set(prev.map((i) => i.id));
-            return [...prev, ...msg.issues.filter((i) => !seen.has(i.id))];
-          });
-        } else if (msg.type === 'clear') setIssues([]);
-        else if (msg.type === 'control') setControl(msg.control);
-        else if (msg.type === 'apps') setApps(msg.apps);
-        else if (msg.type === 'device') setDeviceOnline(msg.online);
-      };
-    };
-    connect();
-    return () => {
-      clearTimeout(retryTimer);
-      ws?.close();
-    };
+  const onApiError = useCallback((e) => {
+    if (!(e instanceof AuthError)) return;
+    authFailedRef.current = true;
+    setAuthFailed(true);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let retryTimer;
+    let source;
+    const getJson = async (path) => (await apiFetch(path)).json();
+
+    // Issues that streamed in while the request was in flight are merged back;
+    // a clear in the meantime makes the response stale, so it is dropped.
+    const refetch = async () => {
+      streamedRef.current = [];
+      const gen = clearGenRef.current;
+      try {
+        const [list, ctl] = await Promise.all([getJson('/issues'), getJson('/control')]);
+        if (cancelled) return;
+        setControl(ctl);
+        if (gen !== clearGenRef.current) return;
+        const seen = new Set();
+        setIssues([...list, ...streamedRef.current].filter((i) => !seen.has(i.id) && seen.add(i.id)));
+      } catch (e) {
+        onApiError(e);
+      }
+    };
+
+    const connect = () => {
+      if (cancelled || authFailedRef.current) return;
+      source = new EventSource(`${API}/events`);
+      source.onopen = () => {
+        setStreamUp(true);
+        refetch();
+      };
+      source.onerror = () => {
+        setStreamUp(false);
+        if (source.readyState === EventSource.CLOSED && !authFailedRef.current) {
+          retryTimer = setTimeout(connect, 2000);
+        }
+      };
+      source.addEventListener('issue', (e) => {
+        const issue = JSON.parse(e.data);
+        streamedRef.current.push(issue);
+        setIssues((prev) => (prev.some((i) => i.id === issue.id) ? prev : [...prev, issue]));
+      });
+      source.addEventListener('clear', () => {
+        clearGenRef.current += 1;
+        streamedRef.current = [];
+        setIssues([]);
+      });
+      source.addEventListener('control', (e) => setControl(JSON.parse(e.data)));
+    };
+
+    (async () => {
+      await authFromUrl();
+      if (cancelled) return;
+      connect();
+      refetch();
+      getJson('/apps').then((a) => !cancelled && setApps(a)).catch(onApiError);
+    })();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(retryTimer);
+      source?.close();
+    };
+  }, [onApiError]);
 
   // The dashboard no longer picks the target — that's chosen on the phone,
   // in the Auditor app's own app list — so this is purely for a friendlier
@@ -164,21 +196,27 @@ export default function App() {
   const grouped = useMemo(() => groupIssues(filtered), [filtered]);
 
   const clearSession = async () => {
-    await fetch(`${SERVER}/issues`, { method: 'DELETE' });
-    setIssues([]);
+    try {
+      await apiFetch('/issues', { method: 'DELETE' });
+      setIssues([]);
+    } catch (e) {
+      onApiError(e);
+    }
   };
 
   const toggleAuditing = async () => {
     const nextAuditing = !control.auditing;
-    if (nextAuditing && (!control.targetPackage || !deviceOnline)) return;
+    if (nextAuditing && !control.targetPackage) return;
     setControlBusy(true);
     try {
-      const res = await fetch(`${SERVER}/control`, {
+      const res = await apiFetch('/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targetPackage: control.targetPackage, auditing: nextAuditing }),
       });
       if (res.ok) setControl(await res.json());
+    } catch (e) {
+      onApiError(e);
     } finally {
       setControlBusy(false);
     }
@@ -186,25 +224,23 @@ export default function App() {
 
   return (
     <div className="app">
+      <div role="status" aria-live="polite" className="stream-banner">
+        {!streamUp && 'Device disconnected — reconnecting…'}
+      </div>
       <header className="topbar">
         <div>
           <h1>A11y Auditor</h1>
-          <p className="target">
-            <span className={connected ? 'ws-on' : 'ws-off'}>{connected ? 'server live' : 'reconnecting…'}</span>
-            {' · '}
-            <span className={deviceOnline ? 'ws-on' : 'ws-off'}>
-              <span className="status-dot" />
-              {deviceOnline ? 'device connected' : 'device disconnected'}
-            </span>
-          </p>
         </div>
         <div className="actions">
-          <a className="btn" href={`${SERVER}/issues/export`} target="_blank" rel="noreferrer">Export HTML</a>
-          <a className="btn" href={`${SERVER}/issues/export?format=csv`} target="_blank" rel="noreferrer">Export CSV</a>
+          <button className="btn" onClick={async () => download('a11y-report.html', await toHtml(issues), 'text/html')}>Export HTML</button>
+          <button className="btn" onClick={() => download('a11y-report.csv', toCsv(issues), 'text/csv')}>Export CSV</button>
           <button className="btn btn-danger" onClick={clearSession}>Clear Session</button>
         </div>
       </header>
 
+      {authFailed ? (
+        <p className="empty">Not signed in to this device's dashboard. Reopen it with "Open dashboard" in the A11y Auditor app, or use "Copy laptop URL".</p>
+      ) : (<>
       <section className="control-bar">
         <div className="target-display">
           <span className="target-display-label">Target</span>
@@ -220,15 +256,14 @@ export default function App() {
         <button
           className={`btn btn-primary ${control.auditing ? 'btn-danger' : ''}`}
           onClick={toggleAuditing}
-          disabled={controlBusy || (!control.auditing && (!control.targetPackage || !deviceOnline))}
+          disabled={controlBusy || (!control.auditing && !control.targetPackage)}
         >
           {control.auditing ? 'Stop Auditing' : 'Start Auditing'}
         </button>
         <p className="control-status">
-          {!deviceOnline && !control.auditing && 'No device connected — open the Auditor app on your phone with the accessibility service enabled.'}
-          {deviceOnline && !control.auditing && control.targetPackage && 'Not auditing — hit Start when ready.'}
-          {deviceOnline && !control.auditing && !control.targetPackage && 'Pick a target app on your phone, then hit Start.'}
-          {control.auditing && <>Auditing <code>{control.targetPackage}</code>{!deviceOnline && ' (device currently unreachable — issues won\'t flow until it reconnects)'}</>}
+          {!control.auditing && control.targetPackage && 'Not auditing — hit Start when ready.'}
+          {!control.auditing && !control.targetPackage && 'Pick a target app on your phone, then hit Start.'}
+          {control.auditing && <>Auditing <code>{control.targetPackage}</code></>}
         </p>
       </section>
 
@@ -291,13 +326,14 @@ export default function App() {
       {lightbox && (
         <div className="lightbox" onClick={() => setLightbox(null)}>
           <ScreenshotWithHighlight
-            screenshot={lightbox.screenshot}
+            src={lightbox.screenshotUrl}
             bounds={lightbox.bounds}
             alt="Enlarged screenshot"
             wrapClassName="lightbox-img-wrap"
           />
         </div>
       )}
+      </>)}
     </div>
   );
 }

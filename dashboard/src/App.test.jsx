@@ -77,7 +77,7 @@ describe('groupIssues', () => {
 describe('ScreenshotWithHighlight', () => {
   it('positions the highlight box as a percentage of the image natural size', () => {
     const bounds = { x: 50, y: 25, width: 100, height: 50 };
-    render(<ScreenshotWithHighlight screenshot="AAAA" bounds={bounds} alt="a screenshot" wrapClassName="wrap" imgClassName="thumb" />);
+    render(<ScreenshotWithHighlight src="/x.webp" bounds={bounds} alt="a screenshot" wrapClassName="wrap" imgClassName="thumb" />);
 
     const img = screen.getByAltText('a screenshot');
     Object.defineProperty(img, 'naturalWidth', { value: 200, configurable: true });
@@ -93,12 +93,12 @@ describe('ScreenshotWithHighlight', () => {
   });
 
   it('renders no highlight before the image has loaded', () => {
-    render(<ScreenshotWithHighlight screenshot="AAAA" bounds={{ x: 0, y: 0, width: 10, height: 10 }} alt="a screenshot" />);
+    render(<ScreenshotWithHighlight src="/x.webp" bounds={{ x: 0, y: 0, width: 10, height: 10 }} alt="a screenshot" />);
     expect(document.querySelector('.issue-highlight')).toBeNull();
   });
 
   it('renders no highlight when there are no bounds', () => {
-    render(<ScreenshotWithHighlight screenshot="AAAA" bounds={null} alt="a screenshot" />);
+    render(<ScreenshotWithHighlight src="/x.webp" bounds={null} alt="a screenshot" />);
     const img = screen.getByAltText('a screenshot');
     Object.defineProperty(img, 'naturalWidth', { value: 200, configurable: true });
     Object.defineProperty(img, 'naturalHeight', { value: 100, configurable: true });
@@ -107,150 +107,206 @@ describe('ScreenshotWithHighlight', () => {
   });
 });
 
-// --- App-level: WebSocket message handling (dedup-by-id) ---
+// --- App-level: SSE handling ---
 
-class FakeWebSocket {
+class FakeEventSource {
+  static CLOSED = 2;
+  static instances = [];
   constructor(url) {
     this.url = url;
+    this.readyState = 0;
+    this.listeners = {};
     this.onopen = null;
-    this.onclose = null;
-    this.onmessage = null;
-    FakeWebSocket.instances.push(this);
+    this.onerror = null;
+    FakeEventSource.instances.push(this);
   }
-  send() {}
-  close() {}
+  addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+  close() { this.readyState = FakeEventSource.CLOSED; }
+  emit(type, data) {
+    if (type === 'open') { this.readyState = 1; this.onopen?.(); return; }
+    if (type === 'error') { this.onerror?.(); return; }
+    (this.listeners[type] || []).forEach((fn) => fn({ data: JSON.stringify(data) }));
+  }
 }
-FakeWebSocket.instances = [];
 
-function mockFetchJson(byPath) {
-  return vi.fn((url) => {
-    const path = Object.keys(byPath).find((p) => url.endsWith(p));
-    return Promise.resolve({ json: () => Promise.resolve(byPath[path]) });
+const iss = (id, extra = {}) => ({ id, severity: 'minor', elementDescription: `E${id}`, description: `d${id}`, timestamp: 1, ...extra });
+const total = () => document.querySelector('.stat-total .stat-value').textContent;
+const es = () => FakeEventSource.instances[FakeEventSource.instances.length - 1];
+
+// byPath values may be a value or a function returning a promise/value.
+function setup(byPath = {}) {
+  const defaults = {
+    '/issues': [],
+    '/control': { targetPackage: null, auditing: false },
+    '/apps': [],
+    '/auth': null,
+    ...byPath,
+  };
+  const fetchMock = vi.fn((url) => {
+    const path = Object.keys(defaults).find((p) => url === `/api/v1${p}`);
+    const v = typeof defaults[path] === 'function' ? defaults[path]() : defaults[path];
+    return Promise.resolve(v).then((body) =>
+      body && body.__status ? { ok: false, status: body.__status } : { ok: true, status: 200, json: () => Promise.resolve(body) });
   });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
 }
 
-describe('App WebSocket "issues" message handling', () => {
+describe('App SSE handling', () => {
   beforeEach(() => {
-    FakeWebSocket.instances = [];
-    vi.stubGlobal('WebSocket', FakeWebSocket);
-    vi.stubGlobal(
-      'fetch',
-      mockFetchJson({
-        '/issues': [],
-        '/control': { targetPackage: null, auditing: false },
-        '/apps': [],
-        '/device': { online: false },
-      })
-    );
+    FakeEventSource.instances = [];
+    vi.stubGlobal('EventSource', FakeEventSource);
+    window.history.replaceState(null, '', '/');
   });
-
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
-  it('appends new issues and dedups by id on repeated "issues" messages', async () => {
-    render(<App />);
-    // Flush the mount effect's fetch().then(setState) microtasks before driving
-    // WS messages, so they don't land mid-assertion and race the act() calls below.
-    await act(async () => {});
-
-    const ws = FakeWebSocket.instances[0];
-    expect(ws).toBeTruthy();
-
-    act(() => {
-      ws.onmessage({
-        data: JSON.stringify({
-          type: 'issues',
-          issues: [
-            { id: 1, severity: 'critical', elementDescription: 'A', description: 'a', timestamp: Date.now() },
-            { id: 2, severity: 'minor', elementDescription: 'B', description: 'b', timestamp: Date.now() },
-          ],
-        }),
-      });
-    });
-
-    expect(document.querySelector('.stat-total .stat-value').textContent).toBe('2');
-
-    // id 2 is a duplicate and should be dropped; id 3 is new and should be appended.
-    act(() => {
-      ws.onmessage({
-        data: JSON.stringify({
-          type: 'issues',
-          issues: [
-            { id: 2, severity: 'minor', elementDescription: 'B', description: 'b', timestamp: Date.now() },
-            { id: 3, severity: 'moderate', elementDescription: 'C', description: 'c', timestamp: Date.now() },
-          ],
-        }),
-      });
-    });
-
-    expect(document.querySelector('.stat-total .stat-value').textContent).toBe('3');
-  });
-
-  it('replaces issues entirely on a "clear" message', async () => {
+  it('appends issue events and dedups by id', async () => {
+    setup();
     render(<App />);
     await act(async () => {});
-    const ws = FakeWebSocket.instances[0];
-
-    act(() => {
-      ws.onmessage({
-        data: JSON.stringify({
-          type: 'issues',
-          issues: [{ id: 1, severity: 'critical', elementDescription: 'A', description: 'a', timestamp: Date.now() }],
-        }),
-      });
-    });
-    expect(document.querySelector('.stat-total .stat-value').textContent).toBe('1');
-
-    act(() => {
-      ws.onmessage({ data: JSON.stringify({ type: 'clear' }) });
-    });
-    expect(document.querySelector('.stat-total .stat-value').textContent).toBe('0');
+    act(() => { es().emit('issue', iss(1)); es().emit('issue', iss(2)); });
+    expect(total()).toBe('2');
+    act(() => { es().emit('issue', iss(2)); es().emit('issue', iss(3)); });
+    expect(total()).toBe('3');
   });
-});
 
-describe('App target display (chosen on the phone, not the dashboard)', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
+  it('clear event empties the list', async () => {
+    setup();
+    render(<App />);
+    await act(async () => {});
+    act(() => es().emit('issue', iss(1)));
+    expect(total()).toBe('1');
+    act(() => es().emit('clear', {}));
+    expect(total()).toBe('0');
+  });
+
+  it('control event updates the target display', async () => {
+    setup();
+    render(<App />);
+    await act(async () => {});
+    act(() => es().emit('control', { targetPackage: 'com.example.wellness', auditing: true }));
+    expect(document.querySelector('.target-app-name')).toHaveTextContent('com.example.wellness');
+    expect(screen.getByRole('button', { name: /stop auditing/i })).toBeInTheDocument();
   });
 
   it('shows a prompt to pick a target on the phone, and disables Start, when none is set yet', async () => {
-    vi.stubGlobal('WebSocket', FakeWebSocket);
-    vi.stubGlobal(
-      'fetch',
-      mockFetchJson({
-        '/issues': [],
-        '/control': { targetPackage: null, auditing: false },
-        '/apps': [],
-        '/device': { online: true },
-      })
-    );
-
+    setup();
     render(<App />);
     await act(async () => {});
-
     expect(screen.getByText(/choose one in the Auditor app on your phone/i)).toBeTruthy();
+    expect(screen.getByText('Pick a target app on your phone, then hit Start.')).toBeTruthy();
     expect(screen.getByRole('button', { name: /start auditing/i })).toBeDisabled();
   });
 
-  it('resolves the target package to its app name once the phone has reported the app list', async () => {
-    vi.stubGlobal('WebSocket', FakeWebSocket);
-    vi.stubGlobal(
-      'fetch',
-      mockFetchJson({
-        '/issues': [],
-        '/control': { targetPackage: 'com.example.wellness', auditing: false },
-        '/apps': [{ appName: 'Wellness', packageName: 'com.example.wellness' }],
-        '/device': { online: true },
-      })
-    );
-
+  it('enables Start once a target is set, with no device gate', async () => {
+    setup({
+      '/control': { targetPackage: 'com.example.wellness', auditing: false },
+      '/apps': [{ appName: 'Wellness', packageName: 'com.example.wellness' }],
+    });
     render(<App />);
     await act(async () => {});
-
     expect(screen.getByText('Wellness')).toBeTruthy();
-    expect(screen.getByText('com.example.wellness')).toBeTruthy();
+    expect(screen.getByText('Not auditing — hit Start when ready.')).toBeTruthy();
     expect(screen.getByRole('button', { name: /start auditing/i })).not.toBeDisabled();
+  });
+
+  it('shows the reconnect banner while the stream is down and clears it on open', async () => {
+    setup();
+    render(<App />);
+    await act(async () => {});
+    expect(screen.getByRole('status')).toHaveTextContent('');
+    act(() => es().emit('error'));
+    expect(screen.getByRole('status')).toHaveTextContent('Device disconnected — reconnecting…');
+    await act(async () => es().emit('open'));
+    expect(screen.getByRole('status')).toHaveTextContent('');
+  });
+
+  it('refetches issues when the stream reopens', async () => {
+    let calls = 0;
+    const fetchMock = setup({ '/issues': () => (++calls === 1 ? [] : [iss(7)]) });
+    render(<App />);
+    await act(async () => {});
+    act(() => es().emit('error'));
+    await act(async () => es().emit('open'));
+    expect(fetchMock.mock.calls.filter(([u]) => u === '/api/v1/issues')).toHaveLength(2);
+    expect(screen.getByText('E7')).toBeTruthy();
+  });
+
+  it('posts the ?t= token to /api/v1/auth and strips it from the URL', async () => {
+    const fetchMock = setup();
+    window.history.replaceState(null, '', '/?t=abc');
+    render(<App />);
+    await act(async () => {});
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/auth', expect.objectContaining({ method: 'POST', body: '{"token":"abc"}' }));
+    expect(window.location.search).toBe('');
+  });
+
+  it('connects the stream only after auth', async () => {
+    let release;
+    setup({ '/auth': () => new Promise((r) => { release = r; }) });
+    window.history.replaceState(null, '', '/?t=abc');
+    render(<App />);
+    await act(async () => {});
+    expect(FakeEventSource.instances).toHaveLength(0);
+    await act(async () => release(null));
+    expect(FakeEventSource.instances).toHaveLength(1);
+  });
+
+  it('shows the sign-in message on 401 and does not recreate the stream', async () => {
+    vi.useFakeTimers();
+    setup({ '/issues': { __status: 401 } });
+    render(<App />);
+    await act(async () => {});
+    expect(screen.getByText(/Not signed in to this device's dashboard/)).toBeTruthy();
+    const before = FakeEventSource.instances.length;
+    act(() => { es().readyState = FakeEventSource.CLOSED; es().emit('error'); });
+    await act(async () => { vi.advanceTimersByTime(2000); });
+    expect(FakeEventSource.instances).toHaveLength(before);
+  });
+
+  it('recreates the stream after 2s when the browser gave up and auth is fine', async () => {
+    vi.useFakeTimers();
+    setup();
+    render(<App />);
+    await act(async () => {});
+    act(() => { es().readyState = FakeEventSource.CLOSED; es().emit('error'); });
+    await act(async () => { vi.advanceTimersByTime(2000); });
+    expect(FakeEventSource.instances).toHaveLength(2);
+  });
+
+  it('keeps an issue that arrives during the refetch', async () => {
+    let release;
+    let calls = 0;
+    setup({ '/issues': () => (++calls === 1 ? [] : new Promise((r) => { release = r; })) });
+    render(<App />);
+    await act(async () => {});
+    await act(async () => es().emit('open'));
+    act(() => es().emit('issue', iss(5)));
+    await act(async () => release([iss(6)]));
+    expect(screen.getByText('E5')).toBeTruthy();
+    expect(screen.getByText('E6')).toBeTruthy();
+  });
+
+  it('a clear during the refetch discards the stale response', async () => {
+    let release;
+    let calls = 0;
+    setup({ '/issues': () => (++calls === 1 ? [] : new Promise((r) => { release = r; })) });
+    render(<App />);
+    await act(async () => {});
+    await act(async () => es().emit('open'));
+    act(() => es().emit('clear', {}));
+    await act(async () => release([iss(9)]));
+    expect(total()).toBe('0');
+  });
+
+  it('renders screenshots from screenshotUrl', async () => {
+    setup({ '/issues': [iss(1, { screenshotUrl: '/api/v1/screenshots/a.webp' })] });
+    render(<App />);
+    await act(async () => {});
+    expect(document.querySelector('img.issue-thumb').src).toMatch(/\/api\/v1\/screenshots\/a\.webp$/);
   });
 });
 
@@ -282,17 +338,9 @@ describe('parseFix', () => {
 
 describe('App fix guidance', () => {
   beforeEach(() => {
-    FakeWebSocket.instances = [];
-    vi.stubGlobal('WebSocket', FakeWebSocket);
-    vi.stubGlobal(
-      'fetch',
-      mockFetchJson({
-        '/issues': [],
-        '/control': { targetPackage: null, auditing: false },
-        '/apps': [],
-        '/device': { online: false },
-      })
-    );
+    FakeEventSource.instances = [];
+    vi.stubGlobal('EventSource', FakeEventSource);
+    setup();
   });
 
   afterEach(() => {
@@ -303,12 +351,7 @@ describe('App fix guidance', () => {
     render(<App />);
     await act(async () => {});
     act(() => {
-      FakeWebSocket.instances[0].onmessage({
-        data: JSON.stringify({
-          type: 'issues',
-          issues: [{ id: 1, timestamp: 1, severity: 'serious', elementDescription: 'Btn', description: 'd', suggestedFix }],
-        }),
-      });
+      es().emit('issue', { id: 1, timestamp: 1, severity: 'serious', elementDescription: 'Btn', description: 'd', suggestedFix });
     });
   };
 
