@@ -96,6 +96,8 @@ export default function App() {
   const authFailedRef = useRef(false); // the effect closure would see stale state
   const streamedRef = useRef([]);
   const clearGenRef = useRef(0);
+  const seqRef = useRef(0);
+  const [apiError, setApiError] = useState(false);
   const [severityFilter, setSeverityFilter] = useState('all');
   const [levelFilter, setLevelFilter] = useState('all');
   const [screenFilter, setScreenFilter] = useState('all');
@@ -103,7 +105,10 @@ export default function App() {
   const [lightbox, setLightbox] = useState(null);
 
   const onApiError = useCallback((e) => {
-    if (!(e instanceof AuthError)) return;
+    if (!(e instanceof AuthError)) {
+      setApiError(true);
+      return;
+    }
     authFailedRef.current = true;
     setAuthFailed(true);
   }, []);
@@ -112,16 +117,22 @@ export default function App() {
     let cancelled = false;
     let retryTimer;
     let source;
-    const getJson = async (path) => (await apiFetch(path)).json();
+    const getJson = async (path) => {
+      const res = await apiFetch(path);
+      if (!res.ok) throw new Error(`${path} ${res.status}`);
+      return res.json();
+    };
 
     // Issues that streamed in while the request was in flight are merged back;
     // a clear in the meantime makes the response stale, so it is dropped.
     const refetch = async () => {
       streamedRef.current = [];
       const gen = clearGenRef.current;
+      const seq = ++seqRef.current; // overlapping refetches: only the newest may apply
       try {
         const [list, ctl] = await Promise.all([getJson('/issues'), getJson('/control')]);
-        if (cancelled) return;
+        if (cancelled || seq !== seqRef.current) return;
+        setApiError(false);
         setControl(ctl);
         if (gen !== clearGenRef.current) return;
         const seen = new Set();
@@ -141,7 +152,10 @@ export default function App() {
       source.onerror = () => {
         setStreamUp(false);
         if (source.readyState === EventSource.CLOSED && !authFailedRef.current) {
-          retryTimer = setTimeout(connect, 2000);
+          // a 401 closes the stream silently: probe so it can surface as authFailed
+          apiFetch('/control').catch(onApiError).finally(() => {
+            retryTimer = setTimeout(connect, 2000);
+          });
         }
       };
       source.addEventListener('issue', (e) => {
@@ -161,7 +175,8 @@ export default function App() {
       await authFromUrl();
       if (cancelled) return;
       connect();
-      refetch();
+      await refetch(); // before /apps, so a successful refetch doesn't clear an /apps failure
+      if (cancelled) return;
       getJson('/apps').then((a) => !cancelled && setApps(a)).catch(onApiError);
     })();
 
@@ -197,7 +212,9 @@ export default function App() {
 
   const clearSession = async () => {
     try {
-      await apiFetch('/issues', { method: 'DELETE' });
+      const res = await apiFetch('/issues', { method: 'DELETE' });
+      if (!res.ok) throw new Error(`DELETE /issues ${res.status}`);
+      setApiError(false);
       setIssues([]);
     } catch (e) {
       onApiError(e);
@@ -214,7 +231,9 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targetPackage: control.targetPackage, auditing: nextAuditing }),
       });
-      if (res.ok) setControl(await res.json());
+      if (!res.ok) throw new Error(`POST /control ${res.status}`);
+      setApiError(false);
+      setControl(await res.json());
     } catch (e) {
       onApiError(e);
     } finally {
@@ -225,7 +244,7 @@ export default function App() {
   return (
     <div className="app">
       <div role="status" aria-live="polite" className="stream-banner">
-        {!streamUp && 'Device disconnected — reconnecting…'}
+        {!authFailed && (!streamUp ? 'Device disconnected — reconnecting…' : apiError && 'Request failed — try again.')}
       </div>
       <header className="topbar">
         <div>

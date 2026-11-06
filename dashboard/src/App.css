@@ -24,10 +24,6 @@
   font-size: 0.85rem;
 }
 
-.stream-banner:empty {
-  display: none;
-}
-
 .actions {
   display: flex;
   gap: 0.5rem;

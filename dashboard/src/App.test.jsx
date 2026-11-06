@@ -261,6 +261,7 @@ describe('App SSE handling', () => {
     render(<App />);
     await act(async () => {});
     expect(screen.getByText(/Not signed in to this device's dashboard/)).toBeTruthy();
+    expect(screen.getByRole('status')).toHaveTextContent('');
     const before = FakeEventSource.instances.length;
     act(() => { es().readyState = FakeEventSource.CLOSED; es().emit('error'); });
     await act(async () => { vi.advanceTimersByTime(2000); });
@@ -273,6 +274,7 @@ describe('App SSE handling', () => {
     render(<App />);
     await act(async () => {});
     act(() => { es().readyState = FakeEventSource.CLOSED; es().emit('error'); });
+    await act(async () => {}); // the auth probe settles before the retry timer starts
     await act(async () => { vi.advanceTimersByTime(2000); });
     expect(FakeEventSource.instances).toHaveLength(2);
   });
@@ -300,6 +302,54 @@ describe('App SSE handling', () => {
     act(() => es().emit('clear', {}));
     await act(async () => release([iss(9)]));
     expect(total()).toBe('0');
+  });
+
+  it('shows the sign-in message when the stream 401s after a good load', async () => {
+    vi.useFakeTimers();
+    let ctl = { targetPackage: null, auditing: false };
+    setup({ '/control': () => ctl });
+    render(<App />);
+    await act(async () => {});
+    ctl = { __status: 401 };
+    const before = FakeEventSource.instances.length;
+    act(() => { es().readyState = FakeEventSource.CLOSED; es().emit('error'); });
+    await act(async () => { vi.advanceTimersByTime(2000); });
+    expect(screen.getByText(/Not signed in to this device's dashboard/)).toBeTruthy();
+    expect(FakeEventSource.instances).toHaveLength(before);
+  });
+
+  it('a 500 on /apps does not blank the page and shows the failure message', async () => {
+    setup({ '/apps': { __status: 500 } });
+    render(<App />);
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: /start auditing/i })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Request failed — try again.');
+  });
+
+  it('a failed DELETE keeps the issues', async () => {
+    const base = setup({ '/issues': [iss(1)] });
+    vi.stubGlobal('fetch', vi.fn((url, init) =>
+      init?.method === 'DELETE' ? Promise.resolve({ ok: false, status: 500 }) : base(url, init)));
+    render(<App />);
+    await act(async () => {});
+    expect(total()).toBe('1');
+    fireEvent.click(screen.getByRole('button', { name: /clear session/i }));
+    await act(async () => {});
+    expect(total()).toBe('1');
+    expect(screen.getByRole('status')).toHaveTextContent('Request failed — try again.');
+  });
+
+  it('discards an older refetch that resolves after a newer one', async () => {
+    const releases = [];
+    setup({ '/issues': () => new Promise((r) => releases.push(r)) });
+    render(<App />);
+    await act(async () => {});
+    await act(async () => es().emit('open'));
+    expect(releases).toHaveLength(2);
+    await act(async () => releases[1]([iss(2)]));
+    await act(async () => releases[0]([iss(1)]));
+    expect(screen.getByText('E2')).toBeTruthy();
+    expect(screen.queryByText('E1')).toBeNull();
   });
 
   it('renders screenshots from screenshotUrl', async () => {
