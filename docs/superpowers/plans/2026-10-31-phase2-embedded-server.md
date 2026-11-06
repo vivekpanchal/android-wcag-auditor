@@ -10,6 +10,12 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-09-live-audit-embedded-server-design.md` — this plan covers §11 phase 2 (§6, §7 minus Phase 3 items, §8, §9 server/dashboard rows). Phase 3 (fingerprints, statuses, tabs, Ignore, progress strip) is out of scope.
 
+## Status (2026-11-06)
+
+- Tasks 1–2: committed (`a99d1db`, `731e568`, `35525bc`).
+- Task 3: code written, uncommitted. **`AuditServerTest` hangs** and still contains `DBG` printlns; see Task 3 Step 4.
+- Tasks 4–9: not started. Each carries amendments from a re-check against the current code, marked **Amended 2026-11-06**.
+
 ## Global Constraints
 
 - **Same issue semantics as today:** every reported issue becomes one row; no dedup, no statuses, no occurrences (Phase 3).
@@ -235,9 +241,23 @@ Expected: compilation FAIL, `Unresolved reference: auditModule`.
 
 - [ ] **Step 3: Implement `ControlStore.kt` and `AuditServer.kt`** per the table. Parse request bodies with `call.receiveText()` + `org.json` (no content-negotiation plugin). Run the auth check before reading any body.
 
-- [ ] **Step 4: Run to verify pass** — same command → PASS; then `bash gradlew testDebugUnitTest` → PASS.
+`ServerDeps` also takes `heartbeatMs: Long = 15_000` (added during implementation): an idle SSE stream writes `: ping\n\n` that often, because a failed write is how a gone client is noticed.
 
-- [ ] **Step 5: Commit** — message `Add embedded Ktor server with token auth, SSE and static dashboard`.
+- [ ] **Step 4: Fix the hanging stream tests (Amended 2026-11-06)**
+
+Observed: the full run produced no result in 12 minutes. A thread dump shows `SDK 34 Main Thread` parked in `testApplication` (`TestApplication.kt:329`) under `delete clears the store and emits clear`, every other thread idle, and none inside `AuditStore`.
+
+Hypothesis, not yet confirmed: `TestApplicationEngine` does not fail writes after the client drops a streaming response. The heartbeat then fills the response channel and suspends forever, so `testApplication` teardown never completes. This would be a test-harness problem, not a production bug.
+
+1. Confirm: `bash gradlew testDebugUnitTest --tests "*AuditServerTest*delete*" -i --console=plain`. Printing `DBG execute done` and then hanging confirms the hypothesis. Stopping at an earlier `DBG` line refutes it: diagnose from that line instead and skip items 3–4.
+2. Remove the four `System.err.println("DBG …")` calls from `AuditServerTest.kt`.
+3. Add a whole-run limit in `app/build.gradle.kts`, so a hang fails instead of blocking CI: `android { testOptions { unitTests.all { it.timeout.set(java.time.Duration.ofMinutes(5)) } } }`.
+4. Move the two stream tests to the real CIO engine: `AuditServer(deps, freePort).start()` plus a raw `java.net.Socket` with `soTimeout = 5000`, writing `GET /api/v1/events` with the cookie and reading lines through a `BufferedReader` past the response headers. Assertions stay the same. `DELETE` goes over a second socket. Stop the server in `finally`. Add:
+   - `dropped client releases its subscription`: after the socket closes, `deps.events.subscriptionCount.value` reaches 0 within `heartbeatMs * 3`.
+
+- [ ] **Step 5: Run to verify pass** — `bash gradlew testDebugUnitTest --tests "*AuditServerTest"` → PASS; then `bash gradlew testDebugUnitTest` → PASS, no `DBG` in `git grep DBG -- auditor-app`.
+
+- [ ] **Step 6: Commit** — message `Add embedded Ktor server with token auth, SSE and static dashboard`.
 
 ---
 
@@ -274,6 +294,31 @@ MainActivity:
 - Copy laptop URL: clip the same URL; on API 33+ set `ClipDescription.EXTRA_IS_SENSITIVE` (the URL carries the token); toast `Copied. On your laptop run: adb forward tcp:8080 tcp:8080`.
 - `connectionStatusText` collects `serverStatus`: Running → `Dashboard: running at localhost:8080`; Failed → `Dashboard failed to start: port 8080 is in use (run "adb reverse --remove tcp:8080"). Auditing still works.`; Stopped → `Dashboard: off — enable the accessibility service`. Colors: Running `status_connected`, else `status_disconnected`.
 
+**Amended 2026-11-06:**
+
+- **Do not stop the server on the main thread.** `AuditServer.stop()` blocks up to 1.5 s, and `onUnbind` and `onDestroy` both run on main. The start coroutine can also still be running, which would leave an orphaned server holding the port. Use one idempotent teardown, called from both:
+
+```kotlin
+private fun stopServer() {
+    val s = server ?: return
+    server = null
+    prefs.unregisterOnSharedPreferenceChangeListener(controlListener)
+    serverStatus.value = ServerStatus.Stopped
+    val job = startJob; val st = store
+    // Outlives serviceScope, which onDestroy cancels. Joining first means stop() sees the started engine.
+    thread(name = "audit-server-stop") { runBlocking { job?.join() }; s.stop(); st.close() }
+}
+```
+
+  The start coroutine sets `serverStatus` only if `server === s` still holds, so a late result cannot overwrite `Stopped`. `onServiceConnected` calls `stopServer()` first, in case it runs twice.
+- **Do not load icons for `/api/v1/apps`.** `loadInstalledApps` decodes every app's icon, which is wasted on each dashboard load. In `AppListAdapter.kt`, add `fun launchableApps(pm: PackageManager, ownPackage: String): List<ActivityInfo>` holding the query, filter, distinct and sort. `loadInstalledApps` maps that to `InstalledAppInfo`; the service's `apps` lambda maps it to `AppEntry(it.loadLabel(pm).toString(), it.packageName)`.
+- **Keep the phone UI live.** `MainActivity` only refreshes on resume or click, so Task 9's "Start from the dashboard → the phone app shows Stop" would fail with a laptop dashboard. Hold a prefs listener in a field (prefs keep only a weak reference), register in `onStart`, unregister in `onStop`, and call `refreshStatus()` from it.
+- `openDashboardButton.isEnabled = status == Running` in the `serverStatus` collector. Catch `ActivityNotFoundException` on open and toast `No browser found`.
+- Remove `instance` from the companion: `SettingsActivity` was its only reason to exist. Remove `serviceRunning` too if the Step 2 grep shows no other reader.
+- Keep `android.permission.INTERNET` in the manifest: the server needs it to open a socket, even though okhttp goes.
+- Reword the stale comments the Step 2 grep will flag: `captureScreenshot` (`DeviceSocket.sendReport`) and `app/build.gradle.kts` (`DeviceProtocolTest` becomes `ApiJsonTest`).
+- New text goes in `strings.xml`. Remove `label_connection_connected` and `label_connection_disconnected`.
+
 - [ ] **Step 1: Make the changes above.**
 
 - [ ] **Step 2: Verify nothing references removed code**
@@ -284,7 +329,14 @@ Expected: no output.
 Run: `cd auditor-app && bash gradlew testDebugUnitTest assembleDebug` (needs `dashboard/dist` only after Task 5; until then `assembleDebug` succeeds without assets)
 Expected: BUILD SUCCESSFUL. If `mergeDebugJavaResource` fails on a duplicate `META-INF/...` file from the Ktor jars, add that exact path to `android { packaging { resources { excludes += ... } } }` and rerun.
 
-- [ ] **Step 4: Commit** — message `Run the dashboard server inside the accessibility service; drop the socket client`.
+- [ ] **Step 4: Smoke-test on a device now (Amended 2026-11-06)**
+
+Ktor CIO has only run on the desktop JVM so far. Finding an ART failure here is cheaper than at Task 9. A scan of the Ktor jars found one `java.lang.management` reference, in `IntellijIdeaDebugDetector`; whether it is safe on Android is unverified.
+
+Run `adb reverse --remove-all`, `bash gradlew installDebug`, then enable the service.
+Expected: the app shows `Dashboard: running at localhost:8080`; `adb shell curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/api/v1/issues` prints `401`; `adb logcat -d | grep -E "NoClassDefFoundError|A11yAuditor.Server"` shows no error.
+
+- [ ] **Step 5: Commit** — message `Run the dashboard server inside the accessibility service; drop the socket client`.
 
 ---
 
@@ -297,7 +349,7 @@ Expected: BUILD SUCCESSFUL. If `mergeDebugJavaResource` fails on a duplicate `ME
 **Interfaces:**
 - Produces: APK assets under `dashboard/` (`dashboard/index.html`, `dashboard/assets/*`), read by the `asset` lambda from Task 4.
 
-- [ ] **Step 1: Add the sync task** (AGP's generated-assets API; Gradle never runs npm):
+- [ ] **Step 1: Add the sync task** (AGP's generated-assets API; Gradle never runs npm). Add `import javax.inject.Inject` at the top of the file:
 
 ```kotlin
 abstract class SyncDashboard : DefaultTask() {
@@ -396,6 +448,17 @@ App behavior:
 - `ScreenshotWithHighlight` takes `src` instead of `screenshot`; cards and lightbox pass `issue.screenshotUrl`.
 - Vite: `server: { proxy: { '/api': 'http://localhost:8080' } }`.
 
+**Amended 2026-11-06:**
+
+- **Order:** create the `EventSource` only after `authFromUrl()` resolves. Otherwise the first connect gets 401 and the banner flashes for 2 s on every open.
+- `streamUp` starts `true`, so the banner does not flash before the first `open`.
+- **StrictMode** (`main.jsx`) runs the effect twice: use a `cancelled` flag so an effect that was cleaned up during `await authFromUrl()` creates no stream, and clear the retry timer on cleanup.
+- Do not recreate the stream once `authFailed` is set. A 401 would otherwise retry every 2 s forever. Hold the flag in a ref, since the effect closure sees stale state.
+- **Refetch race on `open`:** a plain `setIssues(response)` can drop an issue that arrived while the request was in flight, and a response older than a `clear` can bring cleared rows back. Keep a `streamedRef` array (reset when the refetch starts, appended by `issue`) and a `clearGenRef` counter (incremented by `clear`, which also empties `streamedRef`). Discard a response whose generation changed; otherwise set `response` merged with `streamedRef`, deduplicated by id.
+- `toggleAuditing` guard becomes `if (nextAuditing && !control.targetPackage) return`.
+- `control-status` text: not auditing with a target → `Not auditing — hit Start when ready.`; not auditing without one → `Pick a target app on your phone, then hit Start.`; auditing → `Auditing <code>{control.targetPackage}</code>`.
+- Delete the `.ws-on`, `.ws-off` and `.status-dot` rules from `App.css`: the header spans were their only users.
+
 - [ ] **Step 1: Rewrite the App-level tests** — replace `FakeWebSocket` with a `FakeEventSource` (`instances`, `readyState`, `addEventListener`, `onopen`/`onerror`, `close`, helper `emit(type, data)`), stub `fetch` keyed on `/api/v1/...` paths. Keep the logic/`parseFix`/fix-panel tests, driven by `emit('issue', …)` instead of WS messages. Tests:
   - `appends issue events and dedups by id`
   - `clear event empties the list`
@@ -404,7 +467,10 @@ App behavior:
   - `shows the reconnect banner while the stream is down and clears it on open` — `getByRole('status')` text toggles.
   - `refetches issues when the stream reopens` — second `open` after `error` triggers a second `GET /api/v1/issues`, and an issue only in that response renders.
   - `posts the ?t= token to /api/v1/auth and strips it from the URL` — start at `/?t=abc`; expect `fetch('/api/v1/auth', { method: 'POST', body: '{"token":"abc"}', … })` and `location.search === ''`.
-  - `shows the sign-in message on 401`.
+  - `shows the sign-in message on 401` — and `FakeEventSource.instances` does not grow after 2000 ms with the stream `CLOSED` (fake timers).
+  - `keeps an issue that arrives during the refetch` — hold the `/issues` response, `emit('issue', x)`, resolve without `x`, and `x` stays rendered.
+  - `a clear during the refetch discards the stale response` — hold the response, `emit('clear', {})`, resolve with rows, and the list stays empty.
+  - `connects the stream only after auth` — at `/?t=abc`, no `FakeEventSource` exists until the `/api/v1/auth` promise resolves.
   - `renders screenshots from screenshotUrl` — `img.src` ends with `/api/v1/screenshots/a.webp`.
   - `ScreenshotWithHighlight` tests updated for `src`.
 - [ ] **Step 2: Run to verify failure** — `npm test -w dashboard` → the new tests FAIL.
@@ -433,6 +499,8 @@ Expected: only the README's `adb reverse --remove` line. Then `npm test` and `cd
 ### Task 9: On-device verification
 
 **Files:** none unless a check fails (fix in the owning task's files and rerun its tests).
+
+Needs an authorized device or emulator. Run `adb devices -l` first; if more than one is attached, ask the user which to use. Drive the browser and app checks with ARTEMIS (`mobile_run_task`, `device_serial` set); run the `adb` checks directly.
 
 - [ ] **Step 1: Install** — `adb reverse --remove-all; npm run build && cd auditor-app && ./gradlew installDebug`; enable the service. App shows `Dashboard: running at localhost:8080`.
 - [ ] **Step 2: Checklist** (record pass/fail with notes):
