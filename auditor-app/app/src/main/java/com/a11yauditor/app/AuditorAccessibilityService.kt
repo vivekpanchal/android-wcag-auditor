@@ -92,11 +92,19 @@ class AuditorAccessibilityService : AccessibilityService() {
         server = s
         prefs.registerOnSharedPreferenceChangeListener(controlListener)
         // start() blocks while binding, so it stays off the main thread.
+        // Captured here, on main: a later stopServer() replaces `stopping` with a thread that joins this job.
+        val previousStop = stopping
         startJob = serviceScope.launch {
-            val ok = s.start()
+            // The previous server frees port 8080 on its stop thread; starting first would lose the bind.
+            previousStop?.join()
+            // A throw here must not escape: serviceScope has no handler, so it would kill the process.
+            val ok = try { s.start() } catch (e: Exception) {
+                Log.e(TAG, "dashboard server start threw", e)
+                false
+            }
             Log.i(TAG, "dashboard server start ok=$ok")
-            // A late result must not overwrite Stopped.
-            if (server === s) serverStatus.value = if (ok) ServerStatus.Running else ServerStatus.Failed
+            // On main, where `server` is written, so a late result cannot overwrite Stopped.
+            mainHandler.post { if (server === s) serverStatus.value = if (ok) ServerStatus.Running else ServerStatus.Failed }
         }
     }
 
@@ -110,10 +118,15 @@ class AuditorAccessibilityService : AccessibilityService() {
         val job = startJob
         val st = store
         // Outlives serviceScope, which onDestroy cancels. Joining first means stop() sees the started engine.
-        thread(name = "audit-server-stop") {
-            runBlocking { job?.join() }
-            s.stop()
-            st?.close()
+        stopping = thread(name = "audit-server-stop") {
+            try {
+                runBlocking { job?.join() }
+                s.stop()
+            } catch (e: Exception) {
+                Log.e(TAG, "dashboard server stop failed", e)
+            } finally {
+                try { st?.close() } catch (e: Exception) { Log.e(TAG, "closing audit store failed", e) }
+            }
         }
     }
 
@@ -363,5 +376,8 @@ class AuditorAccessibilityService : AccessibilityService() {
         enum class ServerStatus { Stopped, Running, Failed }
 
         val serverStatus = MutableStateFlow(ServerStatus.Stopped)
+
+        // Last server teardown; the next start waits for it so it does not race for the port.
+        @Volatile private var stopping: Thread? = null
     }
 }

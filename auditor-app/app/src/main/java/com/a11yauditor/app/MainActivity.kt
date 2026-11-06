@@ -97,7 +97,7 @@ class MainActivity : AppCompatActivity() {
         "${AuditorAccessibilityService.DASHBOARD_URL}?t=${DashboardToken.getOrCreate(prefs())}"
 
     private fun copyDashboardUrl() {
-        val clip = ClipData.newPlainText("Dashboard URL", dashboardUrl())
+        val clip = ClipData.newPlainText(getString(R.string.label_clip_dashboard_url), dashboardUrl())
         // The URL carries the token, so keep it out of clipboard previews.
         if (Build.VERSION.SDK_INT >= 33) {
             clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }

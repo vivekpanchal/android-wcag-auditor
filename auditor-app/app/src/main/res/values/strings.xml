@@ -13,6 +13,7 @@
     <string name="label_issue_count">Issues found this session: %1$d</string>
     <string name="btn_open_dashboard">Open dashboard</string>
     <string name="btn_copy_url">Copy laptop URL</string>
+    <string name="label_clip_dashboard_url">Dashboard URL</string>
     <string name="toast_url_copied">Copied. On your laptop run: adb forward tcp:8080 tcp:8080</string>
     <string name="toast_no_browser">No browser found</string>
     <string name="label_dashboard_running">Dashboard: running at localhost:8080</string>
