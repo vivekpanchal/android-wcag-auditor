@@ -7,10 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  # dashboard/ and server/ are npm workspaces under the repo root — one
-  # install, one `npm start` builds the dashboard and boots the server on
-  # it, same as the README's documented flow. Smoke-tests the real merged
-  # deliverable: the server serving the dashboard build + API on one port.
+  # dashboard/ is an npm workspace under the repo root: install, test and
+  # build it. The backend lives in the APK (see the android job).
   app:
     runs-on: ubuntu-latest
     steps:
@@ -20,15 +18,7 @@ jobs:
           node-version: 22
       - run: npm install
       - run: npm test
-      - name: Start app and smoke-test it serves both the dashboard and the API
-        run: |
-          npm start &
-          for i in $(seq 1 20); do
-            curl -sf http://localhost:8080/issues > /dev/null && break
-            sleep 0.5
-          done
-          curl -sf http://localhost:8080/issues > /dev/null
-          curl -sf http://localhost:8080/ | grep -q "A11y Auditor Dashboard"
+      - run: npm run build
 
   android:
     runs-on: ubuntu-latest

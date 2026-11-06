@@ -11,76 +11,42 @@ yours or someone else's, doesn't matter.
 ## How it works
 
 ```
-┌─────────────────┐   AccessibilityService    ┌──────────────┐
-│  Target app      │ ─── events + node tree ─→ │ A11y Auditor  │
-│  (any app,       │                            │ (this APK)    │
-│  unmodified)      │                            │ ATF checks    │
-└─────────────────┘                            │ + screenshot   │
-                                                 └──────┬───────┘
-                                                        │ persistent WebSocket
-                                                        │ (adb reverse)
-                                                        ▼
-                                          ┌──────────────────────┐
-                                          │  Node server :8080    │
-                                          │  (/server) — serves    │
-                                          │  the API, WebSocket,  │
-                                          │  and the built React  │
-                                          │  dashboard, one port  │
-                                          └──────────────────────┘
+┌─────────────────┐   AccessibilityService    ┌─────────────────────────┐
+│  Target app      │ ─── events + node tree ─→ │ A11y Auditor APK         │
+│  (any app,       │                            │ ATF checks + screenshot  │
+│  unmodified)      │                            │ Ktor server + SQLite     │
+└─────────────────┘                            │ serves API + dashboard   │
+                                                 └───────────┬─────────────┘
+                                                             │ http://localhost:8080
+                                       ┌─────────────────────┴───────────────┐
+                                       ▼                                     ▼
+                              Phone browser                    Laptop browser (adb forward)
 ```
 
-The Auditor app registers an `AccessibilityService`. Once a target package + Start is set — from
-the app's own UI, or from the dashboard (see below) — the service watches for window/content-change
-events from *that* package only (everything else, including itself, is ignored). On each change it
-grabs every window that belongs to the target app (the activity plus any dialog,
-bottom sheet or popup on top of it), runs each through Google's
+The Auditor app registers an `AccessibilityService`. Once a target package + Start is set, the
+service watches for window/content-change events from *that* package only (everything else,
+including itself, is ignored). On each change it grabs every window that belongs to the target app
+(the activity plus any dialog, bottom sheet or popup on top of it), runs each through Google's
 [Accessibility Test Framework](https://github.com/google/Accessibility-Test-Framework-for-Android)
 (ATF), labels dialog/popup issues as `Activity › Title`, maps each finding to a WCAG 2.1 success
-criterion (see `auditor-app/.../WcagMapping.kt`), optionally grabs a screenshot, and sends the
-result up a persistent WebSocket to the local server (`DeviceSocket`, connected to `/ws/device`),
-which fans it out to the dashboard over its own WebSocket.
+criterion (see `auditor-app/.../WcagMapping.kt`), optionally grabs a screenshot, and stores the
+result in the app's own SQLite database. An embedded Ktor server in the same APK serves the
+built React dashboard and the API, and streams new issues to the dashboard over SSE. Everything
+runs on the phone; no separate backend is needed.
 
-**Controlling from the dashboard:** the same `/ws/device` connection carries control the other
-way too. The dashboard POSTs desired target/auditing state to `POST /control`; the server pushes
-it straight down the Auditor app's open socket the instant it changes — no poll, no delay.
-Starting/stopping from the device's own UI POSTs to the same `/control` endpoint, so both stay in
-sync regardless of which one changed it last. The server is the single source of truth for
-auditing state, but the app degrades gracefully to device-only operation if the server isn't
-reachable (the socket just keeps retrying in the background, control stays local until it
-reconnects).
-
-**Device connection status:** the `/ws/device` connection *is* the presence signal — the server
-marks the device online the instant it connects and offline the instant the socket closes (a
-missed WebSocket ping/pong catches a silent drop, e.g. Wi-Fi/USB dropping without a clean close),
-and broadcasts the change over the dashboard's WebSocket immediately. The dashboard shows a live
-"device connected/disconnected" indicator and refuses to start an audit while offline, both in the
-UI (Start is disabled) and server-side (`POST /control` with `auditing: true` 409s if no device is
-connected) — so you can't accidentally "start" an audit that has no device to run on.
-
-**Picking a target:** the target app is chosen on the phone, not in the dashboard — the Auditor
-app's own list shows every launchable app with its icon, name, and package, tap one to select it.
-The dashboard is read-only about the target: it displays whatever's currently selected (resolved
-to an app name if the phone has reported one, else just the package) and lets you Start/Stop, but
-doesn't let you change *which* app that is. The phone still POSTs its installed-apps list to
-`POST /apps` on every `onResume` (not just cold start, so a missed push — server not up yet, a
-network blip — heals itself next time you switch back to the app), purely so the dashboard can
-show a friendlier name than a bare package string.
-
-**Connection control:** a Settings button on the main screen opens a screen that lets you manually
-disconnect or reconnect the `/ws/device` socket without disabling the accessibility service
-entirely — useful if you want the service watching for events but don't want it talking to a
-server right now. The choice persists across restarts of the service.
+**Picking a target:** choose the target app in the Auditor app's list (icon, name and package for
+each launchable app), or type a package name manually. Start and Stop work from the app or the
+dashboard.
 
 ## Project layout
 
-- `server/` — Express + `ws` backend. In-memory issue store, REST + WebSocket API.
-- `dashboard/` — React + Vite live dashboard.
+- `dashboard/` — React + Vite dashboard, bundled into the APK assets.
 - `auditor-app/` — standalone Android app (Kotlin). Its own package (`com.a11yauditor.app`),
   installed independently of whatever you're auditing.
 
 ## Prerequisites
 
-- Node.js 22.5+ (for `server/` and `dashboard/` — `server/` uses the built-in `node:sqlite` module, added in 22.5; also covers Vite 8 and jsdom's 20.19+ requirement)
+- Node.js 20.19+ (for `dashboard/`, covers Vite 8 and jsdom)
 - Android Studio (to build `auditor-app/` — it'll fetch/repair the Gradle wrapper on first open)
 - A device or emulator running Android 8.0 (API 26) or newer, with `adb` on your `PATH`
   - Screenshots in reported issues require Android 11 (API 30)+; on older devices the Auditor
@@ -88,93 +54,67 @@ server right now. The choice persists across restarts of the service.
 
 ## Setup
 
-### 1. Install and start
+### 1. Build the dashboard and install the app
 
-`dashboard/` and `server/` are npm workspaces under the repo root — one install, one command, run
-from the repo root:
-
-```bash
-npm install
-npm start           # builds the dashboard, then serves it + the API + the WebSocket on :8080
-```
-
-Open `http://localhost:8080` in your browser. It'll show "No active session" until issues start
-arriving.
-
-`npm test` runs the server's tests (`node --test`, no separate framework).
-
-Actively working on the dashboard's UI? Run `npm run dev` from the repo root instead (Vite dev
-server on `:5173` with hot-module-reload) — it still talks to the same API on `:8080` via CORS. The
-server falls back to API-only (no static files) if `dashboard/dist` doesn't exist yet.
-
-### 2. Auditor app
-
-Build and install from Android Studio (open `auditor-app/`, hit Run), or from the command line
-once the Gradle wrapper is present:
+From the repo root, then `auditor-app/`:
 
 ```bash
-cd auditor-app
-./gradlew installDebug
+npm install && npm run build
+cd auditor-app && ./gradlew installDebug
 ```
 
-Or install a prebuilt APK directly:
+The build copies `dashboard/dist` into the APK assets. Or install a prebuilt APK directly:
 
 ```bash
 adb install auditor-app.apk
 ```
 
-### 3. Enable the accessibility service
+Upgrading from the old Node-server setup? Run `adb reverse --remove tcp:8080` first so the old
+reverse tunnel doesn't claim port 8080. Export your reports before upgrading: old session data
+is not migrated.
+
+### 2. Enable the accessibility service
 
 On the device: **Settings → Accessibility → A11y Auditor → On**, or tap "Enable Accessibility
 Service" inside the app, which jumps straight to that settings screen.
 
-### 4. Connect device to the local server
+### 3. Open the dashboard
 
-```bash
-adb reverse tcp:8080 tcp:8080
-```
+Either:
 
-This makes the device's `localhost:8080` point at your machine's `localhost:8080`, so the Auditor
-app can just POST to `http://localhost:8080/report` without knowing your machine's LAN IP.
+- On the phone, tap **Open dashboard** in the Auditor app (opens `http://localhost:8080` in the
+  phone's browser), or
+- On the laptop, run `adb forward tcp:8080 tcp:8080`, then tap **Copy laptop URL** in the app
+  and open that URL in your laptop browser.
 
-### 5. Pick a target and go
+### 4. Pick a target and go
 
-The target app is always chosen on the phone — the dashboard can Start/Stop remotely, but doesn't
-change *which* app is being audited.
+1. Open the A11y Auditor app and pick the app you want audited from the list, or type its package
+   name, e.g. `com.example.myapp`.
+2. Tap **Start Auditing** — or start from the dashboard.
+3. Switch to the target app and use it normally — navigate screens, open dialogs, scroll lists.
+4. Watch issues appear live in the dashboard, grouped by screen, with a running count by severity.
+5. Tap **Stop Auditing** — from either the dashboard or the app — when done.
 
-**On the phone:**
-1. Open the A11y Auditor app.
-2. Pick the app you want audited from the list (icon, name, and package for each installed app),
-   or type its package name manually, e.g. `com.example.myapp`.
-3. Tap **Start Auditing** — or leave it selected and start from the dashboard instead (see below).
-
-**From the dashboard** (`http://localhost:8080`) — once a target is selected on the phone, no
-need to touch the phone again to start/stop:
-1. Confirm the target shown in the control bar matches what you picked on the phone.
-2. Click **Start Auditing**. The phone picks it up instantly over the persistent WebSocket
-   connection, not a poll.
-
-Then, either way:
-4. Switch to the target app on the device and use it normally — navigate screens, open dialogs,
-   scroll lists.
-5. Watch issues appear live in the dashboard, grouped by screen, with a running count by severity.
-6. Click/tap **Stop Auditing** — from either the dashboard or the app — when done.
-
-### 6. Export a report
+### 5. Export a report
 
 In the dashboard: **Export HTML** for a shareable report grouped by screen, or **Export CSV** for
-raw data. **Clear Session** wipes the in-memory store to start a fresh audit run.
+raw data. **Clear Session** wipes the stored session to start a fresh audit run.
 
 When ATF reports the failing element's bounds, both the dashboard and the HTML export draw a
-highlighted box over it on the screenshot (click a thumbnail to enlarge) — no more hunting for
-which element on a busy screen actually failed.
+highlighted box over it on the screenshot (click a thumbnail to enlarge).
+
+### Developing the dashboard
+
+`npm run dev` starts the Vite dev server on `:5173` with hot-module-reload. It proxies `/api` to
+`localhost:8080`, so run `adb forward tcp:8080 tcp:8080` first. `npm test` runs the dashboard tests.
 
 ## WCAG mapping
 
 `auditor-app/app/src/main/java/com/a11yauditor/app/WcagMapping.kt` maps each ATF check class to a
 WCAG 2.1 success criterion + level (e.g. `TouchTargetSizeCheck` → 2.5.5 AAA,
 `TextContrastCheck` → 1.4.3 AA). Extend it by adding another `Criterion` entry keyed by the ATF
-check's simple class name — everything downstream (server, dashboard) already handles arbitrary
+check's simple class name — everything downstream (dashboard) already handles arbitrary
 SC/level values.
 
 Each mapped check also carries fix guidance (`WcagMapping.Fix`): a one-line summary, a Views
@@ -204,8 +144,8 @@ The Gradle wrapper is committed (`auditor-app/gradlew`, pinned by `distributionS
 ## Privacy
 
 Everything is local. The Auditor app only reads accessibility-tree data from the one package
-you've selected as the target, and only sends data to `localhost` (via `adb reverse`). No external
-services, no data leaves the machine.
+you've selected as the target, and stores it on the device, serving it only on `localhost`. No external
+services, no data leaves the device unless you export a report.
 
 ## License
 
