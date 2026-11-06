@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -6,6 +8,9 @@ plugins {
 android {
     namespace = "com.a11yauditor.app"
     compileSdk = 34
+
+    // A hung test (e.g. an unclosed stream) must fail the run, not block CI.
+    testOptions { unitTests.all { it.timeout.set(Duration.ofMinutes(5)) } }
 
     defaultConfig {
         applicationId = "com.a11yauditor.app"
@@ -49,6 +54,10 @@ dependencies {
 
     implementation(libs.okhttp)
 
+    implementation(libs.ktor.server.core)
+    implementation(libs.ktor.server.cio)
+    implementation(libs.ktor.server.status.pages)
+
     // Google's Accessibility Test Framework for Android — runs the actual
     // WCAG-mapped checks against the AccessibilityNodeInfo tree.
     // https://github.com/google/Accessibility-Test-Framework-for-Android
@@ -67,4 +76,5 @@ dependencies {
     // vendored from.
     testImplementation(libs.json)
     testImplementation(libs.robolectric)
+    testImplementation(libs.ktor.server.test.host)
 }
