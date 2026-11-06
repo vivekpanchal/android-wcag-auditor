@@ -427,6 +427,77 @@ describe('App stream handling', () => {
     expect(screen.queryByText('E1')).toBeNull();
   });
 
+  describe('fresh issues', () => {
+    const exportBlob = () => URL.createObjectURL.mock.calls[0][0];
+    const readBlob = (blob) => new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.readAsText(blob);
+    });
+    beforeEach(() => {
+      URL.createObjectURL = vi.fn(() => 'blob:report');
+      URL.revokeObjectURL = vi.fn();
+      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    it.each([
+      ['Export CSV', 'E2'],
+      ['Export HTML', 'E2'],
+    ])('%s fetches /issues and exports what the device has now', async (name, missed) => {
+      let list = [iss(1)];
+      setup({ '/issues': () => list });
+      await mount();
+      list = [iss(1), iss(2)]; // recorded while the stream was not delivering
+      expect(total()).toBe('1');
+      fireEvent.click(screen.getByRole('button', { name }));
+      await flush();
+      await vi.waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(1));
+      expect(await readBlob(exportBlob())).toContain(missed);
+    });
+
+    it.each(['Export CSV', 'Export HTML'])('%s writes nothing when the fetch fails', async (name) => {
+      let list = [iss(1)];
+      setup({ '/issues': () => list });
+      await mount();
+      list = { __status: 500 };
+      fireEvent.click(screen.getByRole('button', { name }));
+      await flush();
+      expect(URL.createObjectURL).not.toHaveBeenCalled();
+      expect(screen.getByRole('status')).toHaveTextContent('Request failed — try again.');
+    });
+
+    it('refetches issues and control when the tab becomes visible, not when hidden', async () => {
+      let list = [];
+      let ctl = { targetPackage: null, auditing: false };
+      setup({ '/issues': () => list, '/control': () => ctl });
+      await mount();
+      const setVisibility = async (state) => {
+        vi.spyOn(document, 'visibilityState', 'get').mockReturnValue(state);
+        document.dispatchEvent(new Event('visibilitychange'));
+        await flush();
+      };
+      list = [iss(4)];
+      ctl = { targetPackage: 'com.ex', auditing: false };
+      await setVisibility('hidden');
+      expect(total()).toBe('0');
+      await setVisibility('visible');
+      expect(total()).toBe('1');
+      expect(document.querySelector('.target-app-name')).toHaveTextContent('com.ex');
+    });
+
+    it('stops refetching on visibility after unmount', async () => {
+      const fetchMock = setup();
+      const { unmount } = await mount();
+      unmount();
+      const before = fetchMock.mock.calls.length;
+      vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+      document.dispatchEvent(new Event('visibilitychange'));
+      await flush();
+      expect(fetchMock.mock.calls.length).toBe(before);
+    });
+  });
+
   describe('screenshots', () => {
     const shot = '/api/v1/screenshots/a.webp';
     beforeEach(() => {

@@ -109,6 +109,12 @@ function IssueCard({ issue, onShowScreenshot }) {
   );
 }
 
+async function getJson(path) {
+  const res = await apiFetch(path);
+  if (!res.ok) throw new Error(`${path} ${res.status}`);
+  return res.json();
+}
+
 export default function App() {
   const [issues, setIssues] = useState([]);
   const [control, setControl] = useState({ targetPackage: null, auditing: false });
@@ -140,12 +146,6 @@ export default function App() {
     let cancelled = false;
     let retryTimer;
     let stream;
-    const getJson = async (path) => {
-      const res = await apiFetch(path);
-      if (!res.ok) throw new Error(`${path} ${res.status}`);
-      return res.json();
-    };
-
     // Issues that streamed in while the request was in flight are merged back;
     // a clear in the meantime makes the response stale, so it is dropped.
     const refetch = async () => {
@@ -164,6 +164,11 @@ export default function App() {
         onApiError(e);
       }
     };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refetch();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
 
     const onEvent = (type, data) => {
       if (type === 'issue') {
@@ -204,6 +209,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      document.removeEventListener('visibilitychange', onVisibility);
       clearTimeout(retryTimer);
       stream?.abort();
     };
@@ -231,6 +237,16 @@ export default function App() {
   );
 
   const grouped = useMemo(() => groupIssues(filtered), [filtered]);
+
+  // Fresh from the device: the live list can be missing issues while the stream is down.
+  const exportFresh = async (write) => {
+    try {
+      await write(await getJson('/issues'));
+      setApiError(false);
+    } catch (e) {
+      onApiError(e);
+    }
+  };
 
   const clearSession = async () => {
     try {
@@ -273,8 +289,8 @@ export default function App() {
           <h1>A11y Auditor</h1>
         </div>
         <div className="actions">
-          <button className="btn" onClick={async () => download('a11y-report.html', await toHtml(issues), 'text/html')}>Export HTML</button>
-          <button className="btn" onClick={() => download('a11y-report.csv', toCsv(issues), 'text/csv')}>Export CSV</button>
+          <button className="btn" onClick={() => exportFresh(async (list) => download('a11y-report.html', await toHtml(list), 'text/html'))}>Export HTML</button>
+          <button className="btn" onClick={() => exportFresh((list) => download('a11y-report.csv', toCsv(list), 'text/csv'))}>Export CSV</button>
           <button className="btn btn-danger" onClick={clearSession}>Clear Session</button>
         </div>
       </header>
