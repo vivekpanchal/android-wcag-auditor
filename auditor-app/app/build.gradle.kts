@@ -1,3 +1,4 @@
+import javax.inject.Inject
 import java.time.Duration
 
 plugins {
@@ -75,4 +76,24 @@ dependencies {
     testImplementation(libs.json)
     testImplementation(libs.robolectric)
     testImplementation(libs.ktor.server.test.host)
+}
+
+abstract class SyncDashboard : DefaultTask() {
+    @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val dist: ConfigurableFileCollection
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+    @get:Inject abstract val fs: FileSystemOperations
+
+    @TaskAction fun sync() {
+        val dir = dist.singleFile
+        if (!File(dir, "index.html").isFile) throw GradleException("Run \"npm run build\" in dashboard/ first")
+        fs.sync { from(dir); into(outputDir.dir("dashboard")) }
+    }
+}
+
+val syncDashboard = tasks.register<SyncDashboard>("syncDashboard") {
+    dist.from(rootProject.layout.projectDirectory.dir("../dashboard/dist"))
+}
+androidComponents {
+    onVariants { it.sources.assets?.addGeneratedSourceDirectory(syncDashboard, SyncDashboard::outputDir) }
 }

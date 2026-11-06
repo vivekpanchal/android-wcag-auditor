@@ -41,6 +41,14 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The APK bundles dashboard/dist, so build it before Gradle.
+      - run: npm install
+        working-directory: .
+      - run: npm run build
+        working-directory: .
       - uses: android-actions/setup-android@v3
       # Caching only; the version comes from the committed wrapper.
       - uses: gradle/actions/setup-gradle@v4
