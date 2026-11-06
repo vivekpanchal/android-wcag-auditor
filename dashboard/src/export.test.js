@@ -1,5 +1,5 @@
 import { it, expect, vi } from 'vitest';
-import { toCsv, toHtml } from './export';
+import { defaultFetchDataUrl, toCsv, toHtml } from './export';
 
 const base = {
   id: 1, packageName: 'com.example', screen: 'Main', timestamp: 0, severity: 'serious',
@@ -50,4 +50,19 @@ it('embeds each screenshot once as a data URL', async () => {
 it('omits the image when the screenshot cannot be fetched', async () => {
   const html = await toHtml([{ ...base, screenshotUrl: '/x.webp' }], async () => null);
   expect(html).not.toContain('<img');
+});
+
+it('fetches screenshots with the Bearer header', async () => {
+  sessionStorage.setItem('a11y_token', 'fake-token');
+  const fetchMock = vi.fn(async () => ({ ok: true, status: 200, blob: async () => new Blob(['x']) }));
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    expect(await defaultFetchDataUrl('/api/v1/screenshots/a.webp')).toMatch(/^data:/);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/v1/screenshots/a.webp');
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer fake-token');
+  } finally {
+    vi.unstubAllGlobals();
+    sessionStorage.clear();
+  }
 });

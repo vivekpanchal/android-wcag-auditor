@@ -2,10 +2,7 @@ package com.a11yauditor.app
 
 import android.util.Log
 import io.ktor.http.ContentType
-import io.ktor.http.Cookie
-import io.ktor.http.CookieEncoding
 import io.ktor.http.HttpHeaders
-import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.http.content.LocalFileContent
 import io.ktor.http.decodeURLPart
@@ -18,7 +15,6 @@ import io.ktor.server.cio.CIO
 import io.ktor.server.engine.ApplicationEngine
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.statuspages.StatusPages
-import io.ktor.server.request.httpMethod
 import io.ktor.server.request.path
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.header
@@ -44,13 +40,10 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.runBlocking
-import org.json.JSONException
-import org.json.JSONObject
 import java.io.InputStream
 import java.security.MessageDigest
 
 private const val TAG = "A11yAuditor.Server"
-private const val SESSION_COOKIE = "a11y_session"
 
 class ServerDeps(
     val store: AuditStore,
@@ -96,8 +89,8 @@ fun Application.auditModule(deps: ServerDeps) {
     intercept(ApplicationCallPipeline.Plugins) {
         val segments = call.request.path().split('/').filter { it.isNotEmpty() }.map { it.decodeURLPart() }
         val isApi = segments.size >= 2 && segments[0] == "api" && segments[1] == "v1"
-        val isAuth = segments == listOf("api", "v1", "auth") && call.request.httpMethod == HttpMethod.Post
-        if (isApi && !isAuth && !deps.tokenMatches(call.request.cookies[SESSION_COOKIE])) {
+        val bearer = call.request.headers[HttpHeaders.Authorization]?.takeIf { it.startsWith("Bearer ") }?.substring(7)
+        if (isApi && !deps.tokenMatches(bearer)) {
             call.respondJson("""{"error":"unauthorized"}""", HttpStatusCode.Unauthorized)
             finish()
         }
@@ -105,17 +98,6 @@ fun Application.auditModule(deps: ServerDeps) {
 
     routing {
         route("/api/v1") {
-            post("/auth") {
-                val token = try { JSONObject(call.receiveText()).optString("token") } catch (e: JSONException) { null }
-                if (!deps.tokenMatches(token)) return@post call.respond(HttpStatusCode.Unauthorized)
-                call.response.cookies.append(
-                    Cookie(
-                        SESSION_COOKIE, deps.token, encoding = CookieEncoding.RAW, path = "/", httpOnly = true,
-                        extensions = mapOf("SameSite" to "Strict"),
-                    )
-                )
-                call.respond(HttpStatusCode.NoContent)
-            }
             get("/issues") { call.respondJson(ApiJson.issues(deps.store.issues())) }
             delete("/issues") {
                 deps.store.clear()

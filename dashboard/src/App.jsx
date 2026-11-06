@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import { filterIssues, groupIssues, parseFix } from './logic';
-import { API, AuthError, apiFetch, authFromUrl } from './api';
+import { AuthError, apiFetch, authFetch, openStream, takeUrlToken } from './api';
 import { download, toCsv, toHtml } from './export';
 
 const SEVERITIES = ['critical', 'serious', 'moderate', 'minor'];
@@ -33,6 +33,29 @@ export function ScreenshotWithHighlight({ src, bounds, alt, wrapClassName, imgCl
       )}
     </div>
   );
+}
+
+// <img> cannot send the Authorization header, so the image comes through a blob URL.
+function AuthedScreenshot({ url, ...props }) {
+  const [src, setSrc] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    let blobUrl;
+    authFetch(url)
+      .then((res) => (res.ok ? res.blob() : Promise.reject(new Error(`${url} ${res.status}`))))
+      .then((blob) => {
+        if (cancelled) return;
+        blobUrl = URL.createObjectURL(blob);
+        setSrc(blobUrl);
+      })
+      .catch(() => {}); // a missing screenshot just shows no image
+    return () => {
+      cancelled = true;
+      setSrc(null);
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [url]);
+  return src && <ScreenshotWithHighlight src={src} {...props} />;
 }
 
 function FixPanel({ fix }) {
@@ -73,8 +96,8 @@ function IssueCard({ issue, onShowScreenshot }) {
       <p className="issue-description">{issue.description}</p>
       <FixPanel fix={parseFix(issue.suggestedFix)} />
       {issue.screenshotUrl && (
-        <ScreenshotWithHighlight
-          src={issue.screenshotUrl}
+        <AuthedScreenshot
+          url={issue.screenshotUrl}
           bounds={issue.bounds}
           alt={`Screenshot: ${issue.elementDescription}`}
           wrapClassName="issue-thumb-wrap"
@@ -92,8 +115,8 @@ export default function App() {
   const [controlBusy, setControlBusy] = useState(false);
   const [apps, setApps] = useState([]);
   const [streamUp, setStreamUp] = useState(true); // true until proven down, so the banner doesn't flash
-  const [authFailed, setAuthFailed] = useState(false);
-  const authFailedRef = useRef(false); // the effect closure would see stale state
+  const [authFailed, setAuthFailed] = useState(() => !takeUrlToken());
+  const authFailedRef = useRef(authFailed); // the effect closure would see stale state
   const streamedRef = useRef([]);
   const clearGenRef = useRef(0);
   const seqRef = useRef(0);
@@ -116,7 +139,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     let retryTimer;
-    let source;
+    let stream;
     const getJson = async (path) => {
       const res = await apiFetch(path);
       if (!res.ok) throw new Error(`${path} ${res.status}`);
@@ -142,38 +165,37 @@ export default function App() {
       }
     };
 
-    const connect = () => {
-      if (cancelled || authFailedRef.current) return;
-      source = new EventSource(`${API}/events`);
-      source.onopen = () => {
-        setStreamUp(true);
-        refetch();
-      };
-      source.onerror = () => {
-        setStreamUp(false);
-        if (source.readyState === EventSource.CLOSED && !authFailedRef.current) {
-          // a 401 closes the stream silently: probe so it can surface as authFailed
-          apiFetch('/control').catch(onApiError).finally(() => {
-            retryTimer = setTimeout(connect, 2000);
-          });
-        }
-      };
-      source.addEventListener('issue', (e) => {
-        const issue = JSON.parse(e.data);
+    const onEvent = (type, data) => {
+      if (type === 'issue') {
+        const issue = JSON.parse(data);
         streamedRef.current.push(issue);
         setIssues((prev) => (prev.some((i) => i.id === issue.id) ? prev : [...prev, issue]));
-      });
-      source.addEventListener('clear', () => {
+      } else if (type === 'clear') {
         clearGenRef.current += 1;
         streamedRef.current = [];
         setIssues([]);
-      });
-      source.addEventListener('control', (e) => setControl(JSON.parse(e.data)));
+      } else if (type === 'control') {
+        setControl(JSON.parse(data));
+      }
+    };
+
+    const connect = async () => {
+      if (cancelled || authFailedRef.current) return;
+      stream = new AbortController();
+      try {
+        await openStream(stream.signal, () => {
+          setStreamUp(true);
+          refetch();
+        }, onEvent);
+      } catch (e) {
+        if (e instanceof AuthError) onApiError(e);
+      }
+      if (cancelled || authFailedRef.current) return;
+      setStreamUp(false);
+      retryTimer = setTimeout(connect, 2000);
     };
 
     (async () => {
-      await authFromUrl();
-      if (cancelled) return;
       connect();
       await refetch(); // before /apps, so a successful refetch doesn't clear an /apps failure
       if (cancelled) return;
@@ -183,7 +205,7 @@ export default function App() {
     return () => {
       cancelled = true;
       clearTimeout(retryTimer);
-      source?.close();
+      stream?.abort();
     };
   }, [onApiError]);
 
@@ -344,8 +366,8 @@ export default function App() {
 
       {lightbox && (
         <div className="lightbox" onClick={() => setLightbox(null)}>
-          <ScreenshotWithHighlight
-            src={lightbox.screenshotUrl}
+          <AuthedScreenshot
+            url={lightbox.screenshotUrl}
             bounds={lightbox.bounds}
             alt="Enlarged screenshot"
             wrapClassName="lightbox-img-wrap"

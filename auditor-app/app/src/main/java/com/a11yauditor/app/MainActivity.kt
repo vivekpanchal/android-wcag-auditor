@@ -177,6 +177,7 @@ class MainActivity : AppCompatActivity() {
                         )
                     )
                     binding.openDashboardButton.isEnabled = running
+                    binding.copyUrlButton.isEnabled = running
                 }
             }
         }

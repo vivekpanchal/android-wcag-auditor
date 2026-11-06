@@ -1,3 +1,4 @@
+import { authFetch } from './api';
 import { parseFix } from './logic';
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -25,7 +26,7 @@ export function toCsv(issues) {
 }
 
 export function defaultFetchDataUrl(url) {
-  return fetch(url)
+  return authFetch(url)
     .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
     .then((blob) => new Promise((resolve) => {
       const reader = new FileReader();

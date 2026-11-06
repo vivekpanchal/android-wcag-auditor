@@ -60,25 +60,26 @@ class AuditServerTest {
         WcagMapping.Fix("S", "v", "c", "https://d"), "views", Rect(1, 2, 11, 22),
     )
 
-    private fun HttpRequestBuilder.authed() = header(HttpHeaders.Cookie, "a11y_session=t0k")
+    private fun HttpRequestBuilder.authed() = header(HttpHeaders.Authorization, "Bearer t0k")
 
     private fun serve(d: ServerDeps = deps, block: suspend ApplicationTestBuilder.() -> Unit) =
         testApplication { application { auditModule(d) }; block() }
 
-    @Test fun `api routes require the session cookie`() = serve {
+    @Test fun `api routes require the bearer token`() = serve {
         for (path in listOf("/api/v1/issues", "/api/v1/control", "/api/v1/screenshots/x.webp", "/api/v1/events")) {
             assertEquals(path, HttpStatusCode.Unauthorized, client.get(path).status)
         }
     }
 
-    @Test fun `auth rejects a wrong token and sets a strict http-only cookie for the right one`() = serve {
-        assertEquals(HttpStatusCode.Unauthorized, client.post("/api/v1/auth") { setBody("""{"token":"nope"}""") }.status)
-        val ok = client.post("/api/v1/auth") { setBody("""{"token":"t0k"}""") }
-        assertEquals(HttpStatusCode.NoContent, ok.status)
-        val cookie = ok.headers[HttpHeaders.SetCookie]!!
-        for (part in listOf("a11y_session=t0k", "HttpOnly", "SameSite=Strict", "Path=/")) {
-            assertTrue(cookie, cookie.contains(part))
-        }
+    @Test fun `a cookie alone is refused`() = serve {
+        val res = client.get("/api/v1/issues") { header(HttpHeaders.Cookie, "a11y_session=t0k") }
+        assertEquals(HttpStatusCode.Unauthorized, res.status)
+    }
+
+    @Test fun `the auth route is gone and sets no cookie`() = serve {
+        val res = client.post("/api/v1/auth") { setBody("""{"token":"t0k"}""") }
+        assertEquals(HttpStatusCode.Unauthorized, res.status)
+        assertEquals(null, res.headers[HttpHeaders.SetCookie])
     }
 
     @Test fun `issues returns recorded issues with screenshot urls`() = serve {
@@ -113,10 +114,10 @@ class AuditServerTest {
         }
     }
 
-    private fun send(port: Int, method: String, path: String): Raw {
+    private fun send(port: Int, method: String, path: String, headers: String = "Authorization: Bearer t0k\r\n"): Raw {
         val socket = Socket("127.0.0.1", port).apply { soTimeout = 5_000 }
         socket.getOutputStream().write(
-            "$method $path HTTP/1.1\r\nHost: localhost\r\nCookie: a11y_session=t0k\r\n\r\n".toByteArray()
+            "$method $path HTTP/1.1\r\nHost: localhost\r\n$headers\r\n".toByteArray()
         )
         socket.getOutputStream().flush()
         return Raw(socket, BufferedReader(InputStreamReader(socket.getInputStream())))

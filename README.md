@@ -87,6 +87,8 @@ Either:
 - On the laptop, run `adb forward tcp:8080 tcp:8080`, then tap **Copy laptop URL** in the app
   and open that URL in your laptop browser.
 
+Sign-in lasts for that browser tab. A new tab needs the app's URL again.
+
 ### 4. Pick a target and go
 
 1. Open the A11y Auditor app and pick the app you want audited from the list, or type its package
@@ -107,7 +109,9 @@ highlighted box over it on the screenshot (click a thumbnail to enlarge).
 ### Developing the dashboard
 
 `npm run dev` starts the Vite dev server on `:5173` with hot-module-reload. It proxies `/api` to
-`localhost:8080`, so run `adb forward tcp:8080 tcp:8080` first. `npm test` runs the dashboard tests.
+`localhost:8080`, so run `adb forward tcp:8080 tcp:8080` first, then open
+`http://localhost:5173/?t=<token>` using the token from **Copy laptop URL**. `npm test` runs the
+dashboard tests.
 
 ## WCAG mapping
 

@@ -22,7 +22,7 @@
 - Android: `minSdk = 26`, `compileSdk = 34`, Kotlin `1.9.24`, JVM target 17. Ktor stays on **2.3.12** — Ktor 3 is built with Kotlin 2 and this module compiles with 1.9.24.
 - New runtime deps: `io.ktor:ktor-server-core`, `ktor-server-cio`, `ktor-server-status-pages` (all 2.3.12). New test deps: `io.ktor:ktor-server-test-host:2.3.12`, `org.robolectric:robolectric:4.13`. Remove `okhttp` (no remaining users after Task 4). No new dashboard deps.
 - Server binds `127.0.0.1` port `8080` only. Starts in `onServiceConnected`, stops in `onUnbind`/`onDestroy`. A failed start never stops auditing.
-- API base `/api/v1`. Session cookie: name `a11y_session`, `Path=/`, `HttpOnly`, `SameSite=Strict`. Every `/api/v1/*` route except `POST /api/v1/auth` returns 401 without it. Static dashboard paths need no cookie.
+- API base `/api/v1`. Auth is `Authorization: Bearer <token>`, kept in `sessionStorage` (`a11y_token`). Every `/api/v1/*` route returns 401 without it; static dashboard paths need no token. No cookie, because cookies have no port isolation (RFC 6265 §8.5) and one would reach any app on another localhost port. No CORS headers, so a cross-origin `Authorization` header fails preflight. Accepted residual risk: an app holding port 8080 while the service is off could read `sessionStorage` if that tab is reloaded. This supersedes the cookie and `POST /api/v1/auth` steps in the tasks below.
 - Token: 32 random bytes from `SecureRandom`, URL-safe Base64 without padding, created once per install, prefs key `dashboard_token`. Compare with `MessageDigest.isEqual`.
 - Screenshots: WebP lossy quality 80, `filesDir/shots`, cap 200 MB (`200L * 1024 * 1024`), evict oldest first (Phase 3 adds status-aware order).
 - Store writes run on `Dispatchers.IO`. ATF stays on the main thread.
@@ -33,7 +33,7 @@
 
 ## Review Focus
 
-1. **Another app on the phone calls `localhost:8080` without the cookie** → 401 on `/api/v1/issues`, `/api/v1/screenshots/*`, `/api/v1/events`, `/api/v1/control`. Test: Task 3 `api routes require the session cookie`.
+1. **Another app on the phone calls `localhost:8080` without the Bearer token** → 401 on `/api/v1/issues`, `/api/v1/screenshots/*`, `/api/v1/events`, `/api/v1/control`. Test: `api routes require the bearer token`.
 2. **Port 8080 already held on the device** (most likely: a leftover `adb reverse tcp:8080 tcp:8080` from the Node setup — adbd owns the device port) → `AuditServer.start()` returns false, the app shows the failure text, auditing still records to the store. Test: Task 3 `start returns false when the port is taken`; README tells users to run `adb reverse --remove tcp:8080` (Task 8).
 3. **SSE drops while issues keep arriving** (service restarted, browser backgrounded) → banner shows, stream reconnects, and issues recorded during the gap appear without a page reload. Test: Task 7 `refetches issues when the stream reopens`.
 4. **Long session fills storage with screenshots** → once `shots/` exceeds the cap the oldest report's file is deleted and its rows keep all fields except the screenshot. Test: Task 2 `cap evicts the oldest screenshot and nulls its rows`.

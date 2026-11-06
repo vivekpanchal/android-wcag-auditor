@@ -19,7 +19,7 @@ class ControlStore(private val prefs: SharedPreferences) {
     }
 }
 
-/** Per-install secret the dashboard exchanges for the session cookie. */
+/** Per-install secret the dashboard sends as its Bearer token. */
 object DashboardToken {
     const val KEY = "dashboard_token"
 
