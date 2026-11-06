@@ -98,7 +98,7 @@ class AuditorAccessibilityService : AccessibilityService() {
             // The previous server frees port 8080 on its stop thread; starting first would lose the bind.
             previousStop?.join()
             // A throw here must not escape: serviceScope has no handler, so it would kill the process.
-            val ok = try { s.start() } catch (e: Exception) {
+            val ok = try { s.start() } catch (e: Throwable) {
                 Log.e(TAG, "dashboard server start threw", e)
                 false
             }
@@ -122,10 +122,10 @@ class AuditorAccessibilityService : AccessibilityService() {
             try {
                 runBlocking { job?.join() }
                 s.stop()
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.e(TAG, "dashboard server stop failed", e)
             } finally {
-                try { st?.close() } catch (e: Exception) { Log.e(TAG, "closing audit store failed", e) }
+                try { st?.close() } catch (e: Throwable) { Log.e(TAG, "closing audit store failed", e) }
             }
         }
     }

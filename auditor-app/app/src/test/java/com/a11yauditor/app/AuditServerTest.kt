@@ -48,9 +48,11 @@ class AuditServerTest {
         deps = deps()
     }
 
-    private fun deps(apps: () -> List<AppEntry> = { listOf(AppEntry("Ex", "com.ex")) }) = ServerDeps(
-        store, control, "t0k", apps,
-        { path -> assets[path]?.let { ByteArrayInputStream(it.toByteArray()) } },
+    private fun deps(
+        apps: () -> List<AppEntry> = { listOf(AppEntry("Ex", "com.ex")) },
+        asset: (String) -> java.io.InputStream? = { path -> assets[path]?.let { ByteArrayInputStream(it.toByteArray()) } },
+    ) = ServerDeps(
+        store, control, "t0k", apps, asset,
         // Short enough that an open stream ends soon after the test drops it, long enough not to interleave.
         heartbeatMs = 1_000,
     )
@@ -97,9 +99,9 @@ class AuditServerTest {
 
     // Streams run on the real CIO engine: testApplication never hands a streaming response to the client
     // until the handler finishes, so an open SSE stream hangs it.
-    private fun withServer(block: (port: Int) -> Unit) {
+    private fun withServer(d: ServerDeps = deps, block: (port: Int) -> Unit) {
         val port = ServerSocket(0).use { it.localPort }
-        val server = AuditServer(deps, port)
+        val server = AuditServer(d, port)
         assertTrue(server.start())
         try { block(port) } finally { server.stop() }
     }
@@ -114,13 +116,19 @@ class AuditServerTest {
         }
     }
 
-    private fun send(port: Int, method: String, path: String, headers: String = "Authorization: Bearer t0k\r\n"): Raw {
+    private fun send(port: Int, method: String, path: String, headers: String = "Authorization: Bearer t0k\r\n", body: String = ""): Raw {
         val socket = Socket("127.0.0.1", port).apply { soTimeout = 5_000 }
         socket.getOutputStream().write(
-            "$method $path HTTP/1.1\r\nHost: localhost\r\n$headers\r\n".toByteArray()
+            "$method $path HTTP/1.1\r\nHost: localhost\r\n$headers\r\n$body".toByteArray()
         )
         socket.getOutputStream().flush()
         return Raw(socket, BufferedReader(InputStreamReader(socket.getInputStream())))
+    }
+
+    /** Status line of a raw request, which the Ktor client could not send: it normalizes paths. */
+    private fun status(port: Int, method: String, path: String, headers: String = "", body: String = ""): String {
+        val raw = send(port, method, path, headers, body)
+        return raw.socket.use { raw.line() }
     }
 
     /** Opens the event stream and returns it positioned after the response headers. */
@@ -161,6 +169,53 @@ class AuditServerTest {
         val deadline = System.currentTimeMillis() + deps.heartbeatMs * 8
         while (deps.events.subscriptionCount.value > 0 && System.currentTimeMillis() < deadline) Thread.sleep(50)
         assertEquals(0, deps.events.subscriptionCount.value)
+    }
+
+    @Test fun `the gate sees through path tricks`() = withServer { port ->
+        for (path in listOf("//api/v1/issues", "/%61pi/v1/issues", "/api/%761/issues")) {
+            assertTrue(path, status(port, "GET", path).contains("401"))
+        }
+    }
+
+    @Test fun `the gate refuses anything but the right bearer header`() = withServer { port ->
+        for (h in listOf(
+            "Authorization: Bearer nope", "Authorization: Bearer ", "Authorization: t0k",
+            "Authorization: Basic t0k", "Cookie: a11y_session=t0k",
+        )) {
+            assertTrue(h, status(port, "GET", "/api/v1/issues", "$h\r\n").contains("401"))
+        }
+        assertTrue(status(port, "GET", "/api/v1/issues", "Authorization: Bearer t0k\r\n").contains("200"))
+    }
+
+    @Test fun `unauthenticated mutations change nothing`() = withServer { port ->
+        deps.recordReport("p", "S", 1, null, listOf(issue))
+        val before = control.get()
+        val body = """{"targetPackage":"com.ex","auditing":true}"""
+        val post = status(port, "POST", "/api/v1/control", "Content-Length: ${body.length}\r\n", body)
+        assertTrue(post, post.contains("401"))
+        assertTrue(status(port, "DELETE", "/api/v1/issues").contains("401"))
+        assertEquals(before, control.get())
+        assertEquals(1, store.issues().size)
+    }
+
+    @Test fun `the removed auth route does not sign anyone in`() = withServer { port ->
+        val body = """{"token":"t0k"}"""
+        val res = send(port, "POST", "/api/v1/auth", "Content-Length: ${body.length}\r\n", body)
+        res.socket.use {
+            assertTrue(res.line().contains("401"))
+            val headers = generateSequence { res.reader.readLine()?.takeIf { it.isNotEmpty() } }.toList()
+            assertFalse(headers.toString(), headers.any { it.startsWith("Set-Cookie", ignoreCase = true) })
+        }
+    }
+
+    @Test fun `encoded traversal never reaches the asset lookup`() {
+        val seen = java.util.concurrent.CopyOnWriteArrayList<String>()
+        withServer(deps(asset = { seen.add(it); null })) { port ->
+            for (path in listOf("/..%2F..%2Fx", "/%2e%2e/x", "/assets/..%2Fx", "/..%5C..%5Cx", "/a%2Fb")) {
+                assertTrue(path, status(port, "GET", path).contains("404"))
+            }
+        }
+        assertEquals(emptyList<String>(), seen.toList())
     }
 
     @Test fun `post control validates the body`() = serve {

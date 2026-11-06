@@ -132,7 +132,8 @@ fun Application.auditModule(deps: ServerDeps) {
         }
         get("/{path...}") {
             val segments = call.parameters.getAll("path").orEmpty()
-            if (".." in segments) return@get call.respond(HttpStatusCode.NotFound)
+            // Decoded by now, so "..%2F" arrives as one segment holding a slash.
+            if (segments.any { ".." in it || '/' in it || '\\' in it }) return@get call.respond(HttpStatusCode.NotFound)
             val path = segments.joinToString("/").ifEmpty { "index.html" }
             val stream = deps.asset(path) ?: return@get call.respond(HttpStatusCode.NotFound)
             call.respondOutputStream(ContentType.defaultForFilePath(path)) { stream.use { it.copyTo(this) } }
@@ -157,7 +158,7 @@ class AuditServer(private val deps: ServerDeps, private val port: Int = 8080) {
             engine = e
             scope = s
             true
-        } catch (ex: Exception) {
+        } catch (ex: Throwable) {
             Log.e(TAG, "server failed to start on port $port", ex)
             e.stop(0, 0)
             s.cancel()
