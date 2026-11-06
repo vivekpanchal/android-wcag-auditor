@@ -23,17 +23,23 @@ import com.google.android.apps.common.testing.accessibility.framework.Accessibil
 import com.google.android.apps.common.testing.accessibility.framework.uielement.AccessibilityHierarchyAndroid
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.IOException
 import java.util.Locale
+import kotlin.concurrent.thread
 
 /**
  * Runs on every window/content change in the currently-targeted app, executes
  * ATF's accessibility checks against the visible node tree, and sends any
- * findings to the local dashboard server over a persistent WebSocket
- * (DeviceSocket, at /ws/device).
+ * findings to the embedded dashboard server (AuditServer, on localhost:8080),
+ * which stores them and streams them to any open dashboard.
  *
  * The ATF integration (AccessibilityHierarchyAndroid.newBuilder/build,
  * AccessibilityCheckPreset.getAccessibilityHierarchyChecksForPreset,
@@ -41,89 +47,85 @@ import java.util.Locale
  * accessibility-test-framework 4.1.1's actual compiled classes via javap —
  * this file compiles clean with that dependency.
  */
-class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener {
+class AuditorAccessibilityService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingAudit: Runnable? = null
     // Target Activity and its window id; a modal dialog hides that window from getWindows(), so index 0 isn't always the activity.
     private val baseScreen = BaseScreenTracker()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val deviceSocket = DeviceSocket(serviceScope, this)
     private lateinit var prefs: SharedPreferences
+    private var store: AuditStore? = null
+    private var deps: ServerDeps? = null
+    private var server: AuditServer? = null
+    private var startJob: Job? = null
+
+    // Held in a field: SharedPreferences keeps only a weak reference to its listeners.
+    private val controlListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key != KEY_IS_AUDITING && key != KEY_TARGET_PACKAGE) return@OnSharedPreferenceChangeListener
+        // Wrapped in try/catch like onAccessibilityEvent: this can run on any thread that edits prefs.
+        try {
+            mainHandler.post { baseScreen.reset() }
+            if (key == KEY_IS_AUDITING && prefs.getBoolean(KEY_IS_AUDITING, false)) sessionIssueCount.value = 0
+            deps?.publishControl()
+        } catch (e: Exception) {
+            Log.e(TAG, "control change handling failed, ignoring it", e)
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        Log.i(TAG, "onServiceConnected")
+        stopServer() // in case this runs twice
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        instance = this
-        serviceRunning.value = true
-        // Off by default only if the Settings screen was used to turn it off
-        // in a previous session — persists a manual disconnect across the
-        // service restarting (accessibility re-enabled, phone reboot, etc).
-        if (prefs.getBoolean(KEY_SOCKET_ENABLED, true)) deviceSocket.connect()
+        val newStore = AuditStore(this, "audit.db", File(filesDir, "shots"))
+        val newDeps = ServerDeps(
+            newStore,
+            ControlStore(prefs),
+            DashboardToken.getOrCreate(prefs),
+            apps = { launchableApps(packageManager, packageName).map { AppEntry(it.loadLabel(packageManager).toString(), it.packageName) } },
+            asset = { p -> try { assets.open("dashboard/$p") } catch (e: IOException) { null } },
+        )
+        val s = AuditServer(newDeps)
+        store = newStore
+        deps = newDeps
+        server = s
+        prefs.registerOnSharedPreferenceChangeListener(controlListener)
+        // start() blocks while binding, so it stays off the main thread.
+        startJob = serviceScope.launch {
+            val ok = s.start()
+            Log.i(TAG, "dashboard server start ok=$ok")
+            // A late result must not overwrite Stopped.
+            if (server === s) serverStatus.value = if (ok) ServerStatus.Running else ServerStatus.Failed
+        }
+    }
+
+    // Both onUnbind and onDestroy run on main and stop() blocks up to 1.5 s, so teardown happens on its own thread.
+    private fun stopServer() {
+        val s = server ?: return
+        Log.i(TAG, "stopping dashboard server")
+        server = null
+        prefs.unregisterOnSharedPreferenceChangeListener(controlListener)
+        serverStatus.value = ServerStatus.Stopped
+        val job = startJob
+        val st = store
+        // Outlives serviceScope, which onDestroy cancels. Joining first means stop() sees the started engine.
+        thread(name = "audit-server-stop") {
+            runBlocking { job?.join() }
+            s.stop()
+            st?.close()
+        }
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
-        serviceRunning.value = false
-        instance = null
-        deviceSocket.close()
+        stopServer()
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
-        instance = null
-        deviceSocket.close()
+        stopServer()
         serviceScope.cancel()
         super.onDestroy()
-    }
-
-    /** Manual override from the Settings screen — see SettingsActivity. */
-    fun connectDeviceSocket() {
-        prefs.edit().putBoolean(KEY_SOCKET_ENABLED, true).apply()
-        deviceSocket.connect()
-    }
-
-    /** Manual override from the Settings screen — see SettingsActivity. */
-    fun disconnectDeviceSocket() {
-        prefs.edit().putBoolean(KEY_SOCKET_ENABLED, false).apply()
-        deviceSocket.close()
-    }
-
-    override fun onConnectionChange(connected: Boolean) {
-        deviceSocketConnected.value = connected
-    }
-
-    /**
-     * Picks up target/auditing changes pushed from the server the instant
-     * the dashboard (or this device's own UI) changes them — see
-     * DeviceSocket. Runs on OkHttp's reader thread, not main; wrapped in
-     * try/catch for the same reason onAccessibilityEvent() is below: an
-     * uncaught exception here would escape onto that thread and kill the
-     * whole process instead of just being skipped.
-     *
-     * No local-change grace window: unlike the old poll, a push is always
-     * sent right after store.setControl() completes, so it can never
-     * carry state that predates a local change still in flight — an echo
-     * of this device's own change already lands on the no-op branch
-     * below. A window here would only ever drop a push outright (nothing
-     * re-sends a skipped one), trading a rare, already-harmless echo race
-     * for a real, permanent desync.
-     */
-    override fun onControl(targetPackage: String?, auditing: Boolean) {
-        try {
-            val wasAuditing = prefs.getBoolean(KEY_IS_AUDITING, false)
-            val currentTarget = prefs.getString(KEY_TARGET_PACKAGE, null)
-            if (auditing == wasAuditing && targetPackage == currentTarget) return
-
-            Log.i(TAG, "remote control changed: auditing=$auditing target=$targetPackage")
-            mainHandler.post { baseScreen.reset() }
-            if (auditing && !wasAuditing) sessionIssueCount.value = 0
-            prefs.edit()
-                .putString(KEY_TARGET_PACKAGE, targetPackage)
-                .putBoolean(KEY_IS_AUDITING, auditing)
-                .apply()
-        } catch (e: Exception) {
-            Log.e(TAG, "onControl failed, ignoring this push", e)
-        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -201,10 +203,17 @@ class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener
         Log.d(TAG, "runAudit: ${perWindow.sumOf { it.second.size }} issue(s) across ${targetWindows.size} window(s)")
         if (perWindow.isEmpty()) return
 
-        captureScreenshot { png ->
+        captureScreenshot { shot ->
             perWindow.forEach { (label, issues) ->
                 sessionIssueCount.value += issues.size
-                deviceSocket.sendReport(targetPackage, label, issues, png)
+                val d = deps ?: return@forEach
+                serviceScope.launch {
+                    try {
+                        d.recordReport(targetPackage, label, System.currentTimeMillis(), shot, issues)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "recording report for '$label' failed", e)
+                    }
+                }
             }
         }
     }
@@ -301,9 +310,9 @@ class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener
                         // already recycled. Either way, degrade to no-screenshot rather
                         // than kill the whole session over a missing image. Scoped to
                         // just the conversion (not onResult itself) so a failure further
-                        // downstream in the caller's callback — e.g. DeviceSocket.sendReport —
+                        // downstream in the caller's callback — e.g. recording the report —
                         // isn't misreported as a screenshot failure and double-delivered.
-                        val png = try {
+                        val shot = try {
                             val bitmap = try {
                                 Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
                             } finally {
@@ -314,14 +323,14 @@ class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener
                             }
                             bitmap?.let {
                                 val out = ByteArrayOutputStream()
-                                it.compress(Bitmap.CompressFormat.PNG, 100, out)
+                                it.compress(Bitmap.CompressFormat.WEBP_LOSSY, 80, out)
                                 out.toByteArray()
                             }
                         } catch (e: Exception) {
                             Log.w(TAG, "screenshot bitmap conversion failed", e)
                             null
                         }
-                        onResult(png)
+                        onResult(shot)
                     }
 
                     override fun onFailure(errorCode: Int) {
@@ -346,18 +355,13 @@ class AuditorAccessibilityService : AccessibilityService(), DeviceSocketListener
         const val PREFS_NAME = "a11y_auditor_prefs"
         const val KEY_TARGET_PACKAGE = "target_package"
         const val KEY_IS_AUDITING = "is_auditing"
-        const val KEY_SOCKET_ENABLED = "socket_enabled"
+        const val DASHBOARD_URL = "http://localhost:8080/"
         private const val DEBOUNCE_MS = 600L
 
-        val serviceRunning = MutableStateFlow(false)
         val sessionIssueCount = MutableStateFlow(0)
-        val deviceSocketConnected = MutableStateFlow(false)
 
-        // The system only ever runs one instance of an AccessibilityService at
-        // a time, so a plain nullable reference is enough to let SettingsActivity
-        // reach the live instance without a bindService() dance -- null means
-        // the service isn't currently running.
-        var instance: AuditorAccessibilityService? = null
-            private set
+        enum class ServerStatus { Stopped, Running, Failed }
+
+        val serverStatus = MutableStateFlow(ServerStatus.Stopped)
     }
 }

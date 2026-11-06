@@ -1,5 +1,8 @@
 package com.a11yauditor.app
 
+import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.view.LayoutInflater
 import android.view.ViewGroup
@@ -7,6 +10,21 @@ import androidx.recyclerview.widget.RecyclerView
 import com.a11yauditor.app.databinding.ItemAppBinding
 
 data class InstalledAppInfo(val appName: String, val packageName: String, val icon: Drawable)
+
+/** Launchable apps other than this one, one per package, sorted by label. */
+fun launchableApps(pm: PackageManager, ownPackage: String): List<ActivityInfo> {
+    val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    return pm.queryIntentActivities(intent, PackageManager.MATCH_ALL)
+        .asSequence()
+        .map { it.activityInfo }
+        .filter { it.packageName != ownPackage }
+        .distinctBy { it.packageName }
+        .sortedBy { it.loadLabel(pm).toString().lowercase() }
+        .toList()
+}
+
+fun loadInstalledApps(pm: PackageManager, ownPackage: String): List<InstalledAppInfo> =
+    launchableApps(pm, ownPackage).map { InstalledAppInfo(it.loadLabel(pm).toString(), it.packageName, it.loadIcon(pm)) }
 
 class AppListAdapter(
     private val apps: List<InstalledAppInfo>,

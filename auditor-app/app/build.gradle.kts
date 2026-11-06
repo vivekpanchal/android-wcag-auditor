@@ -52,8 +52,6 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.kotlinx.coroutines.android)
 
-    implementation(libs.okhttp)
-
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.cio)
     implementation(libs.ktor.server.status.pages)
@@ -70,7 +68,7 @@ dependencies {
     testImplementation(libs.junit)
     // Local unit tests run on a plain JVM against android.jar stubs, which
     // throw at runtime for org.json.* (only Android's real implementation
-    // is usable, not the stub) -- DeviceProtocolTest exercises real
+    // is usable, not the stub) -- ApiJsonTest exercises real
     // JSONObject/JSONArray, so it needs a working implementation on the
     // test classpath. Same artifact android.jar's org.json is originally
     // vendored from.

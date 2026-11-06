@@ -1,8 +1,15 @@
 package com.a11yauditor.app
 
+import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.content.Intent
-import android.content.pm.PackageManager
+import android.content.SharedPreferences
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PersistableBundle
 import android.provider.Settings
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
@@ -13,6 +20,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.a11yauditor.app.AuditorAccessibilityService.Companion.ServerStatus
 import com.a11yauditor.app.databinding.ActivityMainBinding
 import kotlinx.coroutines.launch
 
@@ -20,7 +28,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private var selectedPackage: String? = null
-    private val controlSync = ControlSync()
+    // Held in a field: SharedPreferences keeps only a weak reference. Keeps the buttons live when the dashboard starts or stops auditing.
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> refreshStatus() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,7 +40,7 @@ class MainActivity : AppCompatActivity() {
         selectedPackage = prefs.getString(AuditorAccessibilityService.KEY_TARGET_PACKAGE, null)
         binding.manualPackageInput.setText(selectedPackage ?: "")
 
-        val installedApps = loadInstalledApps()
+        val installedApps = loadInstalledApps(packageManager, packageName)
         binding.appList.layoutManager = LinearLayoutManager(this)
         binding.appList.adapter = AppListAdapter(installedApps) { app ->
             selectedPackage = app.packageName
@@ -51,9 +60,15 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
 
-        binding.settingsButton.setOnClickListener {
-            startActivity(Intent(this, SettingsActivity::class.java))
+        binding.openDashboardButton.setOnClickListener {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(dashboardUrl())))
+            } catch (e: ActivityNotFoundException) {
+                Toast.makeText(this, R.string.toast_no_browser, Toast.LENGTH_SHORT).show()
+            }
         }
+
+        binding.copyUrlButton.setOnClickListener { copyDashboardUrl() }
 
         binding.startStopButton.setOnClickListener { toggleAuditing() }
 
@@ -61,25 +76,44 @@ class MainActivity : AppCompatActivity() {
         observeConnectionState()
     }
 
+    override fun onStart() {
+        super.onStart()
+        prefs().registerOnSharedPreferenceChangeListener(prefsListener)
+    }
+
+    override fun onStop() {
+        prefs().unregisterOnSharedPreferenceChangeListener(prefsListener)
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         refreshStatus()
-        // Re-sent on every resume, not just the cold-start onCreate: the app
-        // list push is fire-and-forget, so if it missed (server not up yet,
-        // transient network blip) the dashboard's picker would otherwise stay
-        // empty until the Activity was destroyed and recreated.
-        controlSync.pushAppList(loadInstalledApps())
+    }
+
+    private fun prefs() = getSharedPreferences(AuditorAccessibilityService.PREFS_NAME, MODE_PRIVATE)
+
+    private fun dashboardUrl() =
+        "${AuditorAccessibilityService.DASHBOARD_URL}?t=${DashboardToken.getOrCreate(prefs())}"
+
+    private fun copyDashboardUrl() {
+        val clip = ClipData.newPlainText("Dashboard URL", dashboardUrl())
+        // The URL carries the token, so keep it out of clipboard previews.
+        if (Build.VERSION.SDK_INT >= 33) {
+            clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
+        }
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
+        Toast.makeText(this, R.string.toast_url_copied, Toast.LENGTH_LONG).show()
     }
 
     private fun toggleAuditing() {
-        val prefs = getSharedPreferences(AuditorAccessibilityService.PREFS_NAME, MODE_PRIVATE)
+        val prefs = prefs()
         val currentlyAuditing = prefs.getBoolean(AuditorAccessibilityService.KEY_IS_AUDITING, false)
 
         if (currentlyAuditing) {
             prefs.edit()
                 .putBoolean(AuditorAccessibilityService.KEY_IS_AUDITING, false)
                 .apply()
-            controlSync.pushControl(selectedPackage, auditing = false)
         } else {
             val pkg = selectedPackage
             if (pkg.isNullOrBlank()) {
@@ -90,22 +124,11 @@ class MainActivity : AppCompatActivity() {
                 binding.statusText.text = getString(R.string.status_service_disabled)
                 return
             }
-            // Auditing still starts locally either way — the accessibility
-            // checks and the on-screen session count don't depend on the
-            // dashboard connection — but if the socket isn't up yet (just
-            // reconnected adb, server was still starting, etc.), say so
-            // explicitly instead of leaving it to look silently broken.
-            // DeviceSocket retries on its own every few seconds; this never
-            // needs a second tap once it catches up.
-            if (!AuditorAccessibilityService.deviceSocketConnected.value) {
-                Toast.makeText(this, R.string.toast_started_while_disconnected, Toast.LENGTH_LONG).show()
-            }
             AuditorAccessibilityService.sessionIssueCount.value = 0
             prefs.edit()
                 .putString(AuditorAccessibilityService.KEY_TARGET_PACKAGE, pkg)
                 .putBoolean(AuditorAccessibilityService.KEY_IS_AUDITING, true)
                 .apply()
-            controlSync.pushControl(pkg, auditing = true)
         }
         refreshStatus()
     }
@@ -134,22 +157,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Live, not just refreshed on resume/click, so reconnecting after a drop
-    // (adb reverse redone, server restarted) visibly updates on its own —
-    // no need to reopen the app or tap anything to see it catch up.
+    // Live, not just refreshed on resume/click, so the status follows the service starting or stopping.
     private fun observeConnectionState() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                AuditorAccessibilityService.deviceSocketConnected.collect { connected ->
+                AuditorAccessibilityService.serverStatus.collect { status ->
+                    val running = status == ServerStatus.Running
                     binding.connectionStatusText.text = getString(
-                        if (connected) R.string.label_connection_connected else R.string.label_connection_disconnected
+                        when (status) {
+                            ServerStatus.Running -> R.string.label_dashboard_running
+                            ServerStatus.Failed -> R.string.label_dashboard_failed
+                            ServerStatus.Stopped -> R.string.label_dashboard_off
+                        }
                     )
                     binding.connectionStatusText.setTextColor(
                         ContextCompat.getColor(
                             this@MainActivity,
-                            if (connected) R.color.status_connected else R.color.status_disconnected
+                            if (running) R.color.status_connected else R.color.status_disconnected
                         )
                     )
+                    binding.openDashboardButton.isEnabled = running
                 }
             }
         }
@@ -162,17 +189,5 @@ class MainActivity : AppCompatActivity() {
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: return false
         return enabled.split(':').any { it.equals(expected, ignoreCase = true) }
-    }
-
-    private fun loadInstalledApps(): List<InstalledAppInfo> {
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        return packageManager.queryIntentActivities(intent, PackageManager.MATCH_ALL)
-            .asSequence()
-            .map { it.activityInfo }
-            .filter { it.packageName != packageName }
-            .distinctBy { it.packageName }
-            .map { InstalledAppInfo(it.loadLabel(packageManager).toString(), it.packageName, it.loadIcon(packageManager)) }
-            .sortedBy { it.appName.lowercase() }
-            .toList()
     }
 }

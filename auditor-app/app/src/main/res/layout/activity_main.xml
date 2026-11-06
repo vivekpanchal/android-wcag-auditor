@@ -23,12 +23,20 @@
         android:text="@string/btn_enable_service" />
 
     <Button
-        android:id="@+id/settingsButton"
+        android:id="@+id/openDashboardButton"
         style="?attr/materialButtonOutlinedStyle"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="@string/btn_settings" />
+        android:text="@string/btn_open_dashboard" />
+
+    <Button
+        android:id="@+id/copyUrlButton"
+        style="?attr/materialButtonOutlinedStyle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/btn_copy_url" />
 
     <TextView
         android:layout_width="match_parent"
@@ -67,7 +75,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:textSize="13sp"
-        tools:text="Dashboard: connected" />
+        tools:text="Dashboard: running at localhost:8080" />
 
     <Button
         android:id="@+id/startStopButton"
