@@ -195,6 +195,26 @@ class AuditServerTest {
         }
     }
 
+    @Test fun `a failed start leaves no uncaught exception`() {
+        val port = ServerSocket(0).use { it.localPort }
+        val first = AuditServer(deps, port)
+        val second = AuditServer(deps, port)
+        val seen = java.util.concurrent.CopyOnWriteArrayList<Throwable>()
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { _, t -> seen.add(t) }
+        try {
+            assertTrue(first.start())
+            assertFalse(second.start())
+            Thread.sleep(1_500) // the CIO accept job fails on its own thread, after start() returned
+            assertEquals(emptyList<Throwable>(), seen.toList())
+            // Contained by our handler, not merely swallowed.
+            assertTrue(org.robolectric.shadows.ShadowLog.getLogs().any { it.msg == "server coroutine failed" })
+        } finally {
+            Thread.setDefaultUncaughtExceptionHandler(previous)
+            second.stop(); first.stop()
+        }
+    }
+
     @Test fun `start returns false when the port is taken`() {
         val port = ServerSocket(0).use { it.localPort }
         val first = AuditServer(deps, port)

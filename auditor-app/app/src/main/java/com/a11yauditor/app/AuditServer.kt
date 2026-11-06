@@ -32,6 +32,11 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.utils.io.writeStringUtf8
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -80,6 +85,7 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondJson(
 fun Application.auditModule(deps: ServerDeps) {
     install(StatusPages) {
         exception<Throwable> { call, cause ->
+            if (cause is CancellationException) throw cause // server stopping or client gone, not a failure
             Log.e(TAG, "request ${call.request.path()} failed", cause)
             call.respondJson("""{"error":"internal"}""", HttpStatusCode.InternalServerError)
         }
@@ -155,19 +161,24 @@ fun Application.auditModule(deps: ServerDeps) {
 /** Dashboard server, bound to loopback only. */
 class AuditServer(private val deps: ServerDeps, private val port: Int = 8080) {
     private var engine: ApplicationEngine? = null
+    private var scope: CoroutineScope? = null
 
     /** False if the server could not start (e.g. port taken); auditing carries on without it. */
     fun start(): Boolean {
-        val e = embeddedServer(CIO, host = "127.0.0.1", port = port) { auditModule(deps) }
+        // CIO's accept job runs on this scope; without a handler its BindException kills the process.
+        val s = CoroutineScope(SupervisorJob() + CoroutineExceptionHandler { _, t -> Log.e(TAG, "server coroutine failed", t) })
+        val e = s.embeddedServer(CIO, host = "127.0.0.1", port = port) { auditModule(deps) }
         return try {
             e.start(wait = false)
             // CIO binds asynchronously; awaiting the connectors surfaces a bind failure here.
             runBlocking { e.resolvedConnectors() }
             engine = e
+            scope = s
             true
         } catch (ex: Exception) {
             Log.e(TAG, "server failed to start on port $port", ex)
             e.stop(0, 0)
+            s.cancel()
             false
         }
     }
@@ -175,5 +186,7 @@ class AuditServer(private val deps: ServerDeps, private val port: Int = 8080) {
     fun stop() {
         engine?.stop(500, 1000)
         engine = null
+        scope?.cancel()
+        scope = null
     }
 }
