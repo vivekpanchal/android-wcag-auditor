@@ -29,29 +29,28 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private var selectedPackage: String? = null
     // Held in a field: SharedPreferences keeps only a weak reference. Keeps the buttons live when the dashboard starts or stops auditing.
-    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> refreshStatus() }
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == AuditorAccessibilityService.KEY_TARGET_PACKAGE) loadTarget()
+        refreshStatus()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        val prefs = getSharedPreferences(AuditorAccessibilityService.PREFS_NAME, MODE_PRIVATE)
-        selectedPackage = prefs.getString(AuditorAccessibilityService.KEY_TARGET_PACKAGE, null)
-        binding.manualPackageInput.setText(selectedPackage ?: "")
-
         val installedApps = loadInstalledApps(packageManager, packageName)
         binding.appList.layoutManager = LinearLayoutManager(this)
         binding.appList.adapter = AppListAdapter(installedApps) { app ->
-            selectedPackage = app.packageName
             binding.manualPackageInput.setText(app.packageName)
+            pickTarget(app.packageName)
         }
 
         binding.manualPackageInput.setOnEditorActionListener { _, actionId, event ->
             val committed = actionId == EditorInfo.IME_ACTION_DONE ||
                 (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)
             if (committed) {
-                selectedPackage = binding.manualPackageInput.text.toString().trim().ifBlank { null }
+                pickTarget(binding.manualPackageInput.text.toString().trim().ifBlank { null })
             }
             committed
         }
@@ -79,6 +78,7 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         prefs().registerOnSharedPreferenceChangeListener(prefsListener)
+        loadTarget() // the listener is off while stopped, and the dashboard may have set a target
     }
 
     override fun onStop() {
@@ -92,6 +92,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun prefs() = getSharedPreferences(AuditorAccessibilityService.PREFS_NAME, MODE_PRIVATE)
+
+    private fun loadTarget() {
+        selectedPackage = prefs().getString(AuditorAccessibilityService.KEY_TARGET_PACKAGE, null)
+        val shown = selectedPackage ?: ""
+        if (binding.manualPackageInput.text.toString() != shown) binding.manualPackageInput.setText(shown)
+    }
+
+    // Saved at once so the dashboard can start an audit. A running audit keeps its target until Start.
+    private fun pickTarget(pkg: String?) {
+        selectedPackage = pkg
+        val prefs = prefs()
+        if (prefs.getBoolean(AuditorAccessibilityService.KEY_IS_AUDITING, false)) return
+        if (prefs.getString(AuditorAccessibilityService.KEY_TARGET_PACKAGE, null) != pkg) {
+            prefs.edit().putString(AuditorAccessibilityService.KEY_TARGET_PACKAGE, pkg).apply()
+        }
+    }
 
     private fun dashboardUrl() =
         "${AuditorAccessibilityService.DASHBOARD_URL}?t=${DashboardToken.getOrCreate(prefs())}"

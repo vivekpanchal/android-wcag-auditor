@@ -11,7 +11,10 @@ android {
     compileSdk = 34
 
     // A hung test (e.g. an unclosed stream) must fail the run, not block CI.
-    testOptions { unitTests.all { it.timeout.set(Duration.ofMinutes(5)) } }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all { it.timeout.set(Duration.ofMinutes(5)) }
+    }
 
     defaultConfig {
         applicationId = "com.a11yauditor.app"
