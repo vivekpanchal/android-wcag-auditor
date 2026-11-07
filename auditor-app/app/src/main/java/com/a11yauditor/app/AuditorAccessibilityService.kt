@@ -78,6 +78,7 @@ class AuditorAccessibilityService : AccessibilityService() {
         Log.i(TAG, "onServiceConnected")
         stopServer() // in case this runs twice
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        serviceBound.value = true
         val newStore = AuditStore(this, "audit.db", File(filesDir, "shots"))
         val newDeps = ServerDeps(
             newStore,
@@ -110,6 +111,7 @@ class AuditorAccessibilityService : AccessibilityService() {
 
     // Both onUnbind and onDestroy run on main and stop() blocks up to 1.5 s, so teardown happens on its own thread.
     private fun stopServer() {
+        serviceBound.value = false
         val s = server ?: return
         Log.i(TAG, "stopping dashboard server")
         server = null
@@ -376,6 +378,9 @@ class AuditorAccessibilityService : AccessibilityService() {
         enum class ServerStatus { Stopped, Running, Failed }
 
         val serverStatus = MutableStateFlow(ServerStatus.Stopped)
+
+        /** Whether the system has this service bound right now; enabled in Settings does not mean running. */
+        val serviceBound = MutableStateFlow(false)
 
         // Last server teardown; the next start waits for it so it does not race for the port.
         @Volatile private var stopping: Thread? = null

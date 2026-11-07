@@ -161,8 +161,8 @@ All other paths serve the dashboard from APK assets.
   another localhost port.
 - The server sends no CORS headers, so a cross-origin `Authorization` header fails preflight.
   That is the CSRF defence.
-- Accepted residual risk: an app holding port 8080 while the service is off could read
-  `sessionStorage` if that tab is reloaded.
+- Accepted residual risk (N1): an open tab sends the token on every retry, so any app binding
+  8080 while the service is off gets the token without a reload. See Future work in the Phase 2 plan.
 - The app shows **Open dashboard** (opens the phone browser at `http://localhost:8080/?t=<token>`)
   and **Copy laptop URL** (for use after `adb forward tcp:8080 tcp:8080`).
 

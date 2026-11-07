@@ -22,7 +22,7 @@
 - Android: `minSdk = 26`, `compileSdk = 34`, Kotlin `1.9.24`, JVM target 17. Ktor stays on **2.3.12** — Ktor 3 is built with Kotlin 2 and this module compiles with 1.9.24.
 - New runtime deps: `io.ktor:ktor-server-core`, `ktor-server-cio`, `ktor-server-status-pages` (all 2.3.12). New test deps: `io.ktor:ktor-server-test-host:2.3.12`, `org.robolectric:robolectric:4.13`. Remove `okhttp` (no remaining users after Task 4). No new dashboard deps.
 - Server binds `127.0.0.1` port `8080` only. Starts in `onServiceConnected`, stops in `onUnbind`/`onDestroy`. A failed start never stops auditing.
-- API base `/api/v1`. Auth is `Authorization: Bearer <token>`, kept in `sessionStorage` (`a11y_token`). Every `/api/v1/*` route returns 401 without it; static dashboard paths need no token. No cookie, because cookies have no port isolation (RFC 6265 §8.5) and one would reach any app on another localhost port. No CORS headers, so a cross-origin `Authorization` header fails preflight. Accepted residual risk: an app holding port 8080 while the service is off could read `sessionStorage` if that tab is reloaded. This supersedes the cookie and `POST /api/v1/auth` steps in the tasks below.
+- API base `/api/v1`. Auth is `Authorization: Bearer <token>`, kept in `sessionStorage` (`a11y_token`). Every `/api/v1/*` route returns 401 without it; static dashboard paths need no token. No cookie, because cookies have no port isolation (RFC 6265 §8.5) and one would reach any app on another localhost port. No CORS headers, so a cross-origin `Authorization` header fails preflight. Accepted residual risk (N1): an open tab sends the token on every retry, so any app binding 8080 while the service is off gets the token without a reload. This supersedes the cookie and `POST /api/v1/auth` steps in the tasks below.
 - Token: 32 random bytes from `SecureRandom`, URL-safe Base64 without padding, created once per install, prefs key `dashboard_token`. Compare with `MessageDigest.isEqual`.
 - Screenshots: WebP lossy quality 80, `filesDir/shots`, cap 200 MB (`200L * 1024 * 1024`), evict oldest first (Phase 3 adds status-aware order).
 - Store writes run on `Dispatchers.IO`. ATF stays on the main thread.
@@ -515,3 +515,14 @@ Needs an authorized device or emulator. Run `adb devices -l` first; if more than
   - [ ] With `adb reverse tcp:8080 tcp:8080` set before enabling the service, the app shows the port-in-use message and auditing still counts issues (Review Focus 2).
   - [ ] Phase 1 checks still pass: dialog/sheet/popup issues grouped as `Activity › Title`; "How to fix" panel with the detected framework first.
 - [ ] **Step 3: Report** — list each item as pass/fail.
+
+## Future work
+
+- **Per-run session secret:** replace the permanent install token so a captured token (N1) stops working when the server restarts.
+- Deferred minors from final review:
+  - N2: a 401 on a screenshot clears the token without showing sign-in.
+  - N3: bad JSON in `onEvent` leaves the stream open.
+  - N4: CRLF frames are not dispatched.
+  - N5: unit tests need `npm run build` locally.
+  - N6: a pick made during an audit is dropped on `onStart`.
+- Not yet run: API 26 smoke run, laptop browser, `npm run dev`.

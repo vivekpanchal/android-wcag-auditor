@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
@@ -23,6 +24,10 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.a11yauditor.app.AuditorAccessibilityService.Companion.ServerStatus
 import com.a11yauditor.app.databinding.ActivityMainBinding
 import kotlinx.coroutines.launch
+
+/** The setting may hold `pkg/.Class` or `pkg/full.Class`, so compare parsed names, not strings. */
+internal fun isServiceInSetting(setting: String?, service: ComponentName): Boolean =
+    setting?.split(':')?.any { ComponentName.unflattenFromString(it) == service } == true
 
 class MainActivity : AppCompatActivity() {
 
@@ -73,6 +78,7 @@ class MainActivity : AppCompatActivity() {
 
         observeIssueCount()
         observeConnectionState()
+        observeServiceBound()
     }
 
     override fun onStart() {
@@ -136,8 +142,8 @@ class MainActivity : AppCompatActivity() {
                 binding.statusText.text = "Pick a target app first"
                 return
             }
-            if (!isAccessibilityServiceEnabled()) {
-                binding.statusText.text = getString(R.string.status_service_disabled)
+            if (!serviceReady()) {
+                refreshStatus()
                 return
             }
             AuditorAccessibilityService.sessionIssueCount.value = 0
@@ -156,11 +162,12 @@ class MainActivity : AppCompatActivity() {
 
         binding.statusText.text = when {
             !serviceEnabled -> getString(R.string.status_service_disabled)
+            !serviceReady() -> getString(R.string.status_service_not_running)
             selectedPackage == null -> getString(R.string.status_no_target)
             else -> getString(R.string.status_service_enabled)
         }
         binding.startStopButton.text = getString(if (auditing) R.string.btn_stop else R.string.btn_start)
-        binding.startStopButton.isEnabled = serviceEnabled
+        binding.startStopButton.isEnabled = serviceReady() || auditing
     }
 
     private fun observeIssueCount() {
@@ -169,6 +176,14 @@ class MainActivity : AppCompatActivity() {
                 AuditorAccessibilityService.sessionIssueCount.collect { count ->
                     binding.issueCountText.text = getString(R.string.label_issue_count, count)
                 }
+            }
+        }
+    }
+
+    private fun observeServiceBound() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                AuditorAccessibilityService.serviceBound.collect { refreshStatus() }
             }
         }
     }
@@ -199,12 +214,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun isAccessibilityServiceEnabled(): Boolean {
-        val expected = "$packageName/${AuditorAccessibilityService::class.java.name}"
-        val enabled = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-        return enabled.split(':').any { it.equals(expected, ignoreCase = true) }
-    }
+    private fun serviceReady() = isAccessibilityServiceEnabled() && AuditorAccessibilityService.serviceBound.value
+
+    private fun isAccessibilityServiceEnabled() = isServiceInSetting(
+        Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES),
+        ComponentName(this, AuditorAccessibilityService::class.java),
+    )
 }

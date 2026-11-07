@@ -2,6 +2,7 @@ package com.a11yauditor.app
 
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.view.LayoutInflater
@@ -11,13 +12,13 @@ import com.a11yauditor.app.databinding.ItemAppBinding
 
 data class InstalledAppInfo(val appName: String, val packageName: String, val icon: Drawable)
 
-/** Launchable apps other than this one, one per package, sorted by label. */
+/** Launchable user-installed apps other than this one, one per package, sorted by label. Updated system apps stay hidden too. */
 fun launchableApps(pm: PackageManager, ownPackage: String): List<ActivityInfo> {
     val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
     return pm.queryIntentActivities(intent, PackageManager.MATCH_ALL)
         .asSequence()
         .map { it.activityInfo }
-        .filter { it.packageName != ownPackage }
+        .filter { it.packageName != ownPackage && it.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM == 0 }
         .distinctBy { it.packageName }
         .sortedBy { it.loadLabel(pm).toString().lowercase() }
         .toList()
