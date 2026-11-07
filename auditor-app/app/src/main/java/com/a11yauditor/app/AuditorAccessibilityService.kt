@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Handler
@@ -30,7 +31,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.ByteArrayOutputStream
-import java.io.File
 import java.io.IOException
 import java.util.Locale
 import kotlin.concurrent.thread
@@ -55,8 +55,10 @@ class AuditorAccessibilityService : AccessibilityService() {
     private val baseScreen = BaseScreenTracker()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var prefs: SharedPreferences
-    private var store: AuditStore? = null
     private var deps: ServerDeps? = null
+    private var overlay: AuditOverlay? = null
+    // A target event arrived while the panel paused scanning; closing it must catch up, and only then.
+    private var missedChange = false
     private var server: AuditServer? = null
     private var startJob: Job? = null
 
@@ -66,7 +68,10 @@ class AuditorAccessibilityService : AccessibilityService() {
         // Wrapped in try/catch like onAccessibilityEvent: this can run on any thread that edits prefs.
         try {
             mainHandler.post { baseScreen.reset() }
-            if (key == KEY_IS_AUDITING && prefs.getBoolean(KEY_IS_AUDITING, false)) sessionIssueCount.value = 0
+            if (key == KEY_IS_AUDITING) {
+                if (prefs.getBoolean(KEY_IS_AUDITING, false)) sessionIssueCount.value = 0
+                else mainHandler.post { stopLive() }
+            }
             deps?.publishControl()
         } catch (e: Exception) {
             Log.e(TAG, "control change handling failed, ignoring it", e)
@@ -79,17 +84,22 @@ class AuditorAccessibilityService : AccessibilityService() {
         stopServer() // in case this runs twice
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         serviceBound.value = true
-        val newStore = AuditStore(this, "audit.db", File(filesDir, "shots"))
+        overlay = AuditOverlay(this, prefs) {
+            if (missedChange) {
+                missedChange = false
+                prefs.getString(KEY_TARGET_PACKAGE, null)?.let { scheduleAudit(it) }
+            }
+        }
         val newDeps = ServerDeps(
-            newStore,
+            (application as AuditorApplication).store,
             ControlStore(prefs),
             DashboardToken.getOrCreate(prefs),
             apps = { launchableApps(packageManager, packageName).map { AppEntry(it.loadLabel(packageManager).toString(), it.packageName) } },
             asset = { p -> try { assets.open("dashboard/$p") } catch (e: IOException) { null } },
         )
         val s = AuditServer(newDeps)
-        store = newStore
         deps = newDeps
+        serverDeps = newDeps
         server = s
         prefs.registerOnSharedPreferenceChangeListener(controlListener)
         // start() blocks while binding, so it stays off the main thread.
@@ -112,13 +122,14 @@ class AuditorAccessibilityService : AccessibilityService() {
     // Both onUnbind and onDestroy run on main and stop() blocks up to 1.5 s, so teardown happens on its own thread.
     private fun stopServer() {
         serviceBound.value = false
+        serverDeps = null
+        stopLive()
         val s = server ?: return
         Log.i(TAG, "stopping dashboard server")
         server = null
         prefs.unregisterOnSharedPreferenceChangeListener(controlListener)
         serverStatus.value = ServerStatus.Stopped
         val job = startJob
-        val st = store
         // Outlives serviceScope, which onDestroy cancels. Joining first means stop() sees the started engine.
         stopping = thread(name = "audit-server-stop") {
             try {
@@ -126,9 +137,24 @@ class AuditorAccessibilityService : AccessibilityService() {
                 s.stop()
             } catch (e: Throwable) {
                 Log.e(TAG, "dashboard server stop failed", e)
-            } finally {
-                try { st?.close() } catch (e: Throwable) { Log.e(TAG, "closing audit store failed", e) }
             }
+        }
+    }
+
+    /** Also cancels a queued pass, so nothing runs or lands after Stop. */
+    private fun stopLive() {
+        pendingAudit?.let { mainHandler.removeCallbacks(it) }
+        pendingAudit = null
+        missedChange = false
+        overlay?.remove()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        try {
+            overlay?.onConfigurationChanged()
+        } catch (e: Exception) {
+            Log.e(TAG, "overlay rotation handling failed", e)
         }
     }
 
@@ -160,6 +186,7 @@ class AuditorAccessibilityService : AccessibilityService() {
                 return
             }
             val isWindowsChanged = event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+            if (isWindowsChanged && overlay?.isOwnWindowChange == true) return
             if (!ScreenNaming.shouldScan(event.packageName?.toString(), isWindowsChanged, targetPackage)) return
             if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 event.className?.toString()
@@ -167,16 +194,28 @@ class AuditorAccessibilityService : AccessibilityService() {
                     ?.let { baseScreen.onActivity(targetPackage, it, event.windowId) }
             }
 
-            // Content-changed events fire rapidly while a screen settles (layout
-            // passes, animations, etc). Debounce so we audit once the screen is
-            // actually still, not on every intermediate frame.
-            pendingAudit?.let { mainHandler.removeCallbacks(it) }
-            val runnable = Runnable { runAudit(targetPackage) }
-            pendingAudit = runnable
-            mainHandler.postDelayed(runnable, DEBOUNCE_MS)
+            // The panel shows a snapshot, so scans wait; a new screen or leaving the target ends it.
+            val open = overlay?.takeIf { it.panelOpen }
+            if (open != null) {
+                missedChange = true
+                if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) open.closePanel()
+                else if (isWindowsChanged && currentTargetWindows(targetPackage).isEmpty()) open.closePanel()
+                return
+            }
+            scheduleAudit(targetPackage)
         } catch (e: Exception) {
             Log.e(TAG, "onAccessibilityEvent failed, skipping this event", e)
         }
+    }
+
+    private fun scheduleAudit(targetPackage: String) {
+        // Content-changed events fire rapidly while a screen settles (layout
+        // passes, animations, etc). Debounce so we audit once the screen is
+        // actually still, not on every intermediate frame.
+        pendingAudit?.let { mainHandler.removeCallbacks(it) }
+        val runnable = Runnable { runAudit(targetPackage) }
+        pendingAudit = runnable
+        mainHandler.postDelayed(runnable, DEBOUNCE_MS)
     }
 
     override fun onInterrupt() {}
@@ -185,6 +224,7 @@ class AuditorAccessibilityService : AccessibilityService() {
         // Runs from a main-Handler Runnable: an OEM getWindows() quirk or a window
         // torn down mid-read must skip this pass, not kill the service.
         try {
+            if (!isAuditing() || overlay?.panelOpen == true) return
             auditWindows(targetPackage)
         } catch (e: Exception) {
             Log.e(TAG, "runAudit failed, skipping this pass", e)
@@ -198,6 +238,7 @@ class AuditorAccessibilityService : AccessibilityService() {
         val targetWindows = currentTargetWindows(targetPackage)
         if (targetWindows.isEmpty()) {
             Log.d(TAG, "runAudit: no $targetPackage windows on screen, skipping")
+            overlay?.render(null)
             return
         }
         val activity = baseScreen.activityFor(targetPackage)
@@ -205,20 +246,23 @@ class AuditorAccessibilityService : AccessibilityService() {
 
         // One ATF run per window so a failure in one (e.g. a popup mid-dismiss)
         // doesn't drop the others, and each dialog/popup gets its own screen label.
-        val perWindow = targetWindows.mapIndexedNotNull { index, window ->
+        val results = targetWindows.mapIndexed { index, window ->
             val issues = try {
                 checkHierarchy(window.root)
             } catch (e: Exception) {
                 Log.e(TAG, "ATF check run failed on window '${window.title}'", e)
                 emptyList()
             }
-            if (issues.isEmpty()) null
-            else ScreenNaming.screenLabel(activity, window, isBase = ScreenNaming.isBase(window, index, baseId)) to issues
+            ScreenNaming.screenLabel(activity, window, isBase = ScreenNaming.isBase(window, index, baseId)) to issues
         }
+        // Before the screenshot, so the count does not wait on capture; a clean pass must reach the bubble too.
+        overlay?.render(LiveScan.from(results))
+        val perWindow = results.filter { it.second.isNotEmpty() }
         Log.d(TAG, "runAudit: ${perWindow.sumOf { it.second.size }} issue(s) across ${targetWindows.size} window(s)")
         if (perWindow.isEmpty()) return
 
-        captureScreenshot { shot ->
+        captureWithoutOverlay { shot ->
+            if (!isAuditing()) return@captureWithoutOverlay
             perWindow.forEach { (label, issues) ->
                 sessionIssueCount.value += issues.size
                 val d = deps ?: return@forEach
@@ -305,6 +349,35 @@ class AuditorAccessibilityService : AccessibilityService() {
             .joinToString(" ")
             .ifBlank { "Unnamed element" }
 
+    private fun isAuditing() = prefs.getBoolean(KEY_IS_AUDITING, false)
+
+    /** The bubble must not appear in stored screenshots, and hiding it needs a frame to reach the screen first. */
+    private fun captureWithoutOverlay(onResult: (ByteArray?) -> Unit) {
+        val o = overlay
+        if (o == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            captureScreenshot(onResult)
+            return
+        }
+        o.setBubbleHidden(true)
+        // shortcut: fixed delay of about 3 frames at 60 Hz; upgrade to a frame callback if the bubble shows up in shots.
+        mainHandler.postDelayed({
+            try {
+                if (o.panelOpen || !isAuditing()) {
+                    o.setBubbleHidden(false)
+                    onResult(null)
+                } else {
+                    captureScreenshot { shot ->
+                        o.setBubbleHidden(false)
+                        onResult(shot)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "overlay-free capture failed, skipping this report", e)
+                o.setBubbleHidden(false)
+            }
+        }, OVERLAY_HIDE_MS)
+    }
+
     private fun captureScreenshot(onResult: (ByteArray?) -> Unit) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             onResult(null)
@@ -372,6 +445,7 @@ class AuditorAccessibilityService : AccessibilityService() {
         const val KEY_IS_AUDITING = "is_auditing"
         const val DASHBOARD_URL = "http://localhost:8080/"
         private const val DEBOUNCE_MS = 600L
+        private const val OVERLAY_HIDE_MS = 50L
 
         val sessionIssueCount = MutableStateFlow(0)
 
@@ -381,6 +455,9 @@ class AuditorAccessibilityService : AccessibilityService() {
 
         /** Whether the system has this service bound right now; enabled in Settings does not mean running. */
         val serviceBound = MutableStateFlow(false)
+
+        /** Set while the service runs, so the app's Clear also reaches open dashboards. */
+        @Volatile var serverDeps: ServerDeps? = null
 
         // Last server teardown; the next start waits for it so it does not race for the port.
         @Volatile private var stopping: Thread? = null

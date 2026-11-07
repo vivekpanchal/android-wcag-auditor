@@ -19,5 +19,28 @@
     <string name="toast_no_browser">No browser found</string>
     <string name="label_dashboard_running">Dashboard: running at localhost:8080</string>
     <string name="label_dashboard_failed">Dashboard failed to start: port 8080 is in use (run \"adb reverse --remove tcp:8080\"). Auditing still works.</string>
+    <string name="btn_close">Close</string>
+    <string name="btn_clear">Clear</string>
+    <string name="title_issues">Issues</string>
+    <string name="filter_all">All</string>
+    <string name="filter_serious">Serious</string>
+    <string name="filter_moderate">Moderate</string>
+    <string name="issues_empty">No issues to show.</string>
+    <string name="clear_confirm">Delete all stored issues and screenshots? This cannot be undone.</string>
+    <string name="overlay_clean">No issues found on this screen.</string>
+    <string name="issue_meta">%1$s · %2$s %3$s</string>
+    <string name="issue_meta_count">%1$s · %2$s %3$s · seen %4$d times</string>
+    <string name="desc_issue_shot">Screenshot with %1$s outlined</string>
+    <string name="desc_back">Back</string>
+    <string name="state_expanded">Expanded</string>
+    <string name="state_collapsed">Collapsed</string>
+    <plurals name="overlay_bubble_label">
+        <item quantity="one">%1$d issue on this screen, open</item>
+        <item quantity="other">%1$d issues on this screen, open</item>
+    </plurals>
+    <plurals name="overlay_panel_title">
+        <item quantity="one">%1$d issue on this screen</item>
+        <item quantity="other">%1$d issues on this screen</item>
+    </plurals>
     <string name="label_dashboard_off">Dashboard: off — enable the accessibility service</string>
 </resources>

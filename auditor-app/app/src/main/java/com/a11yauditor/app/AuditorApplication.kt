@@ -3,6 +3,7 @@ package com.a11yauditor.app
 import android.app.Application
 import android.os.Process
 import android.util.Log
+import java.io.File
 
 /**
  * ponytail: the platform kills the process on any uncaught exception on the
@@ -13,6 +14,9 @@ import android.util.Log
  * dead audit session tells you what killed it.
  */
 class AuditorApplication : Application() {
+
+    /** Process-wide so stored issues stay readable while the service is off. */
+    val store by lazy { AuditStore(this, "audit.db", File(filesDir, "shots")) }
 
     override fun onCreate() {
         super.onCreate()

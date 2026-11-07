@@ -63,6 +63,11 @@ class ServerDeps(
         events.tryEmit(ApiJson.sse("issue", ApiJson.issue(it).toString()))
     }
 
+    fun clearIssues() {
+        store.clear()
+        events.tryEmit(ApiJson.sse("clear", "{}"))
+    }
+
     fun publishControl() {
         events.tryEmit(ApiJson.sse("control", ApiJson.control(control.get())))
     }
@@ -100,8 +105,7 @@ fun Application.auditModule(deps: ServerDeps) {
         route("/api/v1") {
             get("/issues") { call.respondJson(ApiJson.issues(deps.store.issues())) }
             delete("/issues") {
-                deps.store.clear()
-                deps.events.tryEmit(ApiJson.sse("clear", "{}"))
+                deps.clearIssues()
                 call.respond(HttpStatusCode.NoContent)
             }
             get("/screenshots/{name}") {
