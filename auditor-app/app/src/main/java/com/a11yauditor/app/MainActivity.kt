@@ -17,13 +17,18 @@ import android.view.inputmethod.EditorInfo
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.isVisible
+import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.a11yauditor.app.AuditorAccessibilityService.Companion.ServerStatus
 import com.a11yauditor.app.databinding.ActivityMainBinding
+import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** The setting may hold `pkg/.Class` or `pkg/full.Class`, so compare parsed names, not strings. */
 internal fun isServiceInSetting(setting: String?, service: ComponentName): Boolean =
@@ -46,10 +51,12 @@ class MainActivity : AppCompatActivity() {
 
         val installedApps = loadInstalledApps(packageManager, packageName)
         binding.appList.layoutManager = LinearLayoutManager(this)
-        binding.appList.adapter = AppListAdapter(installedApps) { app ->
+        val appAdapter = AppListAdapter(installedApps) { app ->
             binding.manualPackageInput.setText(app.packageName)
             pickTarget(app.packageName)
         }
+        binding.appList.adapter = appAdapter
+        binding.appSearchInput.doAfterTextChanged { appAdapter.filter(it.toString()) }
 
         binding.manualPackageInput.setOnEditorActionListener { _, actionId, event ->
             val committed = actionId == EditorInfo.IME_ACTION_DONE ||
@@ -74,6 +81,8 @@ class MainActivity : AppCompatActivity() {
 
         binding.copyUrlButton.setOnClickListener { copyDashboardUrl() }
 
+        binding.viewIssuesButton.setOnClickListener { openIssues() }
+
         binding.startStopButton.setOnClickListener { toggleAuditing() }
 
         observeIssueCount()
@@ -95,6 +104,28 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshStatus()
+        refreshIssueButton()
+    }
+
+    private fun openIssues() = startActivity(Intent(this, IssuesActivity::class.java))
+
+    private suspend fun issueGroups() = withContext(Dispatchers.IO) {
+        groupStored((application as AuditorApplication).store.issues()).size
+    }
+
+    private fun refreshIssueButton() {
+        lifecycleScope.launch { binding.viewIssuesButton.text = getString(R.string.btn_view_issues, issueGroups()) }
+    }
+
+    private fun offerIssues() {
+        lifecycleScope.launch {
+            val groups = issueGroups()
+            if (groups == 0) return@launch
+            Snackbar.make(binding.root, getString(R.string.snackbar_stopped, groups), Snackbar.LENGTH_LONG)
+                .setAnchorView(binding.startStopButton)
+                .setAction(R.string.btn_view) { openIssues() }
+                .show()
+        }
     }
 
     private fun prefs() = getSharedPreferences(AuditorAccessibilityService.PREFS_NAME, MODE_PRIVATE)
@@ -136,10 +167,11 @@ class MainActivity : AppCompatActivity() {
             prefs.edit()
                 .putBoolean(AuditorAccessibilityService.KEY_IS_AUDITING, false)
                 .apply()
+            offerIssues()
         } else {
             val pkg = selectedPackage
             if (pkg.isNullOrBlank()) {
-                binding.statusText.text = "Pick a target app first"
+                binding.statusText.text = getString(R.string.status_pick_target)
                 return
             }
             if (!serviceReady()) {
@@ -168,6 +200,7 @@ class MainActivity : AppCompatActivity() {
         }
         binding.startStopButton.text = getString(if (auditing) R.string.btn_stop else R.string.btn_start)
         binding.startStopButton.isEnabled = serviceReady() || auditing
+        binding.enableServiceButton.isVisible = !serviceReady()
     }
 
     private fun observeIssueCount() {
@@ -175,6 +208,7 @@ class MainActivity : AppCompatActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 AuditorAccessibilityService.sessionIssueCount.collect { count ->
                     binding.issueCountText.text = getString(R.string.label_issue_count, count)
+                    refreshIssueButton()
                 }
             }
         }

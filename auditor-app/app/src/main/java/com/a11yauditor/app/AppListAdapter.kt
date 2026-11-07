@@ -28,11 +28,19 @@ fun loadInstalledApps(pm: PackageManager, ownPackage: String): List<InstalledApp
     launchableApps(pm, ownPackage).map { InstalledAppInfo(it.loadLabel(pm).toString(), it.packageName, it.loadIcon(pm)) }
 
 class AppListAdapter(
-    private val apps: List<InstalledAppInfo>,
+    private val allApps: List<InstalledAppInfo>,
     private val onSelect: (InstalledAppInfo) -> Unit,
 ) : RecyclerView.Adapter<AppListAdapter.ViewHolder>() {
 
+    private var apps = allApps
     private var selectedPackage: String? = null
+
+    @android.annotation.SuppressLint("NotifyDataSetChanged") // the whole list can change per keystroke
+    fun filter(query: String) {
+        val q = query.trim()
+        apps = allApps.filter { it.appName.contains(q, ignoreCase = true) || it.packageName.contains(q, ignoreCase = true) }
+        notifyDataSetChanged()
+    }
 
     class ViewHolder(val binding: ItemAppBinding) : RecyclerView.ViewHolder(binding.root)
 

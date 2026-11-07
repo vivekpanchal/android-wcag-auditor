@@ -32,6 +32,19 @@ class ServiceStatusAndAppsTest {
         assertFalse(isServiceInSetting(null, service))
     }
 
+    @Test fun `search matches app name or package, ignoring case`() {
+        val icon = android.graphics.drawable.ColorDrawable()
+        val adapter = AppListAdapter(
+            listOf(InstalledAppInfo("Maps", "com.ex.maps", icon), InstalledAppInfo("Notes", "com.ex.notes", icon)),
+        ) {}
+        adapter.filter(" maps ")
+        assertEquals(1, adapter.itemCount)
+        adapter.filter("com.ex")
+        assertEquals(2, adapter.itemCount)
+        adapter.filter("zzz")
+        assertEquals(0, adapter.itemCount)
+    }
+
     private fun resolve(pkg: String, appFlags: Int) = ResolveInfo().apply {
         activityInfo = ActivityInfo().apply {
             packageName = pkg

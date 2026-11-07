@@ -19,6 +19,12 @@
     <string name="toast_no_browser">No browser found</string>
     <string name="label_dashboard_running">Dashboard: running at localhost:8080</string>
     <string name="label_dashboard_failed">Dashboard failed to start: port 8080 is in use (run \"adb reverse --remove tcp:8080\"). Auditing still works.</string>
+    <string name="label_target">Target app</string>
+    <string name="hint_search_apps">Search apps</string>
+    <string name="status_pick_target">Pick a target app first</string>
+    <string name="btn_view_issues">View issues (%1$d)</string>
+    <string name="btn_view">View</string>
+    <string name="snackbar_stopped">Audit stopped. Unique issues stored: %1$d</string>
     <string name="btn_close">Close</string>
     <string name="btn_clear">Clear</string>
     <string name="title_issues">Issues</string>
