@@ -17,6 +17,8 @@ import android.view.inputmethod.EditorInfo
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
@@ -63,6 +65,7 @@ class MainActivity : AppCompatActivity() {
                 (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)
             if (committed) {
                 pickTarget(binding.manualPackageInput.text.toString().trim().ifBlank { null })
+                dismissKeyboard()
             }
             committed
         }
@@ -83,7 +86,10 @@ class MainActivity : AppCompatActivity() {
 
         binding.viewIssuesButton.setOnClickListener { openIssues() }
 
-        binding.startStopButton.setOnClickListener { toggleAuditing() }
+        binding.startStopButton.setOnClickListener {
+            dismissKeyboard()
+            toggleAuditing()
+        }
 
         observeIssueCount()
         observeConnectionState()
@@ -107,7 +113,13 @@ class MainActivity : AppCompatActivity() {
         refreshIssueButton()
     }
 
-    private fun openIssues() = startActivity(Intent(this, IssuesActivity::class.java))
+    // shortcut: API 26-27 move focus to the first field on clearFocus(); stateAlwaysHidden still keeps the keyboard shut.
+    private fun dismissKeyboard() {
+        WindowCompat.getInsetsController(window, binding.root).hide(WindowInsetsCompat.Type.ime())
+        currentFocus?.clearFocus()
+    }
+
+    private fun openIssues() =startActivity(Intent(this, IssuesActivity::class.java))
 
     private suspend fun issueGroups() = withContext(Dispatchers.IO) {
         groupStored((application as AuditorApplication).store.issues()).size
