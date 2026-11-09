@@ -169,8 +169,10 @@ class MainActivity : AppCompatActivity() {
                 .apply()
             offerIssues()
         } else {
-            val pkg = selectedPackage
-            if (pkg.isNullOrBlank()) {
+            // The field, not the last Done, so a typed package is used even without pressing Done.
+            val pkg = binding.manualPackageInput.text.toString().trim().ifBlank { null }
+            selectedPackage = pkg
+            if (pkg == null) {
                 binding.statusText.text = getString(R.string.status_pick_target)
                 return
             }
