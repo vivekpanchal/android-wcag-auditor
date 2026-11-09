@@ -17,8 +17,8 @@ data class TargetWindow<R>(
 
 /**
  * The target Activity and its window id from the last TYPE_WINDOW_STATE_CHANGED.
- * Reset whenever auditing stops or the target changes, so a stale window id
- * can't mislabel the next session's base screen as an overlay.
+ * Fed while auditing is stopped too, so Start with the target already open still
+ * knows its Activity. Reset when the target changes.
  */
 class BaseScreenTracker {
     private var packageName: String? = null

@@ -67,7 +67,7 @@ class AuditorAccessibilityService : AccessibilityService() {
         if (key != KEY_IS_AUDITING && key != KEY_TARGET_PACKAGE) return@OnSharedPreferenceChangeListener
         // Wrapped in try/catch like onAccessibilityEvent: this can run on any thread that edits prefs.
         try {
-            mainHandler.post { baseScreen.reset() }
+            if (key == KEY_TARGET_PACKAGE) mainHandler.post { baseScreen.reset() }
             if (key == KEY_IS_AUDITING) {
                 if (prefs.getBoolean(KEY_IS_AUDITING, false)) sessionIssueCount.value = 0
                 else mainHandler.post { stopLive() }
@@ -180,19 +180,18 @@ class AuditorAccessibilityService : AccessibilityService() {
         // and move on to the next event.
         try {
             val targetPackage = prefs.getString(KEY_TARGET_PACKAGE, null) ?: return
-            val auditing = prefs.getBoolean(KEY_IS_AUDITING, false)
-            if (!auditing) {
-                baseScreen.reset()
-                return
-            }
-            val isWindowsChanged = event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
-            if (isWindowsChanged && overlay?.isOwnWindowChange == true) return
-            if (!ScreenNaming.shouldScan(event.packageName?.toString(), isWindowsChanged, targetPackage)) return
-            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            // Tracked while stopped too: Start with the target already open sends no new Activity event.
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                event.packageName?.toString() == targetPackage
+            ) {
                 event.className?.toString()
                     ?.takeIf { isActivity(targetPackage, it) }
                     ?.let { baseScreen.onActivity(targetPackage, it, event.windowId) }
             }
+            if (!prefs.getBoolean(KEY_IS_AUDITING, false)) return
+            val isWindowsChanged = event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+            if (isWindowsChanged && overlay?.isOwnWindowChange == true) return
+            if (!ScreenNaming.shouldScan(event.packageName?.toString(), isWindowsChanged, targetPackage)) return
 
             // The panel shows a snapshot, so scans wait; a new screen or leaving the target ends it.
             val open = overlay?.takeIf { it.panelOpen }
@@ -258,7 +257,7 @@ class AuditorAccessibilityService : AccessibilityService() {
         // Before the screenshot, so the count does not wait on capture; a clean pass must reach the bubble too.
         overlay?.render(LiveScan.from(results))
         val perWindow = results.filter { it.second.isNotEmpty() }
-        Log.d(TAG, "runAudit: ${perWindow.sumOf { it.second.size }} issue(s) across ${targetWindows.size} window(s)")
+        Log.d(TAG, "runAudit: ${perWindow.sumOf { it.second.size }} issue(s) across ${targetWindows.size} window(s) ${results.map { it.first }}")
         if (perWindow.isEmpty()) return
 
         captureWithoutOverlay { shot ->
