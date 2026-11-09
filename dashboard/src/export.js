@@ -1,3 +1,5 @@
+import { authFetch } from './api';
+import { parseFix } from './logic';
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -9,29 +11,6 @@ function csvField(s) {
   return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
-// suggestedFix is a JSON string {summary, views, compose, docUrl, framework}
-// from the device. Older rows hold plain text, shown as the summary.
-// Same contract as dashboard/src/logic.js parseFix; this copy goes away when
-// export moves into the dashboard (Phase 2).
-function parseFix(raw) {
-  if (!raw) return null;
-  try {
-    const fix = JSON.parse(raw);
-    // Keep only string fields: anything on localhost can send reports, and a
-    // non-string here would crash rendering.
-    if (fix && typeof fix.summary === 'string' && fix.summary) {
-      return Object.fromEntries(
-        ['summary', 'views', 'compose', 'docUrl', 'framework']
-          .filter((k) => typeof fix[k] === 'string')
-          .map((k) => [k, fix[k]])
-      );
-    }
-  } catch {
-    // plain text, handled below
-  }
-  return { summary: String(raw) };
-}
-
 function fixHtml(fix) {
   if (!fix) return '';
   const code = fix.framework === 'compose' ? fix.compose : fix.views;
@@ -40,13 +19,37 @@ function fixHtml(fix) {
   return `<div class="fix"><p><strong>How to fix:</strong> ${escapeHtml(fix.summary)}</p>${code ? `<pre><code>${escapeHtml(code)}</code></pre>` : ''}${docs}</div>`;
 }
 
-function toCsv(issues) {
+export function toCsv(issues) {
   const header = ['id', 'packageName', 'screen', 'timestamp', 'severity', 'wcagSC', 'wcagLevel', 'elementDescription', 'description', 'suggestedFix'];
   const rows = issues.map((i) => header.map((h) => csvField(h === 'suggestedFix' ? parseFix(i[h])?.summary : i[h])).join(','));
   return [header.join(','), ...rows].join('\n');
 }
 
-function toHtml(issues) {
+export function defaultFetchDataUrl(url) {
+  return authFetch(url)
+    .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
+    .then((blob) => new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    }))
+    .catch(() => null);
+}
+
+export function download(filename, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export async function toHtml(issues, fetchDataUrl = defaultFetchDataUrl) {
+  const urls = [...new Set(issues.map((i) => i.screenshotUrl).filter(Boolean))];
+  const dataUrls = new Map(await Promise.all(urls.map(async (u) => [u, await fetchDataUrl(u).catch(() => null)])));
+
   const groups = new Map();
   for (const issue of issues) {
     const key = `${issue.packageName || 'unknown'} — ${issue.screen || 'unknown screen'}`;
@@ -68,9 +71,9 @@ function toHtml(issues) {
           <p class="element"><strong>Element:</strong> ${escapeHtml(i.elementDescription)}</p>
           <p class="description">${escapeHtml(i.description)}</p>
           ${fixHtml(parseFix(i.suggestedFix))}
-          ${i.screenshot ? `
+          ${dataUrls.get(i.screenshotUrl) ? `
           <div class="screenshot-wrap">
-            <img class="screenshot" src="data:image/png;base64,${i.screenshot}" alt="Screenshot of ${escapeHtml(i.elementDescription)}" />
+            <img class="screenshot" src="${dataUrls.get(i.screenshotUrl)}" alt="Screenshot of ${escapeHtml(i.elementDescription)}" />
             ${i.bounds ? `<div class="screenshot-highlight" data-bounds="${i.bounds.x},${i.bounds.y},${i.bounds.width},${i.bounds.height}"></div>` : ''}
           </div>` : ''}
         </div>
@@ -130,5 +133,3 @@ function toHtml(issues) {
 </body>
 </html>`;
 }
-
-module.exports = { toCsv, toHtml };

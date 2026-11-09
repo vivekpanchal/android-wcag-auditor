@@ -21,7 +21,8 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:windowSoftInputMode="stateAlwaysHidden|adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -29,9 +30,8 @@
         </activity>
 
         <activity
-            android:name=".SettingsActivity"
-            android:exported="false"
-            android:label="@string/btn_settings" />
+            android:name=".IssuesActivity"
+            android:exported="false" />
 
         <service
             android:name=".AuditorAccessibilityService"

@@ -19,21 +19,9 @@
   letter-spacing: -0.01em;
 }
 
-.target {
-  margin: 0.25rem 0 0;
+.stream-banner {
+  color: var(--status-bad-text);
   font-size: 0.85rem;
-}
-
-.ws-on { color: var(--status-ok-text); }
-.ws-off { color: var(--status-bad-text); }
-
-.status-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  margin-right: 0.3rem;
 }
 
 .actions {

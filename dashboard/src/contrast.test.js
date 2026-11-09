@@ -41,5 +41,11 @@ describe('dashboard colour contrast (SC 1.4.3)', () => {
         expect(contrast(token('link', theme), token(bg, theme))).toBeGreaterThanOrEqual(4.5);
       }
     });
+
+    it(`stream banner text passes on its surface in ${name}`, () => {
+      for (const bg of ['surface-1', 'page-plane']) {
+        expect(contrast(token('status-bad-text', theme), token(bg, theme))).toBeGreaterThanOrEqual(4.5);
+      }
+    });
   }
 });

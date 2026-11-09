@@ -1,3 +1,6 @@
+import javax.inject.Inject
+import java.time.Duration
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -6,6 +9,12 @@ plugins {
 android {
     namespace = "com.a11yauditor.app"
     compileSdk = 34
+
+    // A hung test (e.g. an unclosed stream) must fail the run, not block CI.
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all { it.timeout.set(Duration.ofMinutes(5)) }
+    }
 
     defaultConfig {
         applicationId = "com.a11yauditor.app"
@@ -47,7 +56,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.kotlinx.coroutines.android)
 
-    implementation(libs.okhttp)
+    implementation(libs.ktor.server.core)
+    implementation(libs.ktor.server.cio)
+    implementation(libs.ktor.server.status.pages)
 
     // Google's Accessibility Test Framework for Android — runs the actual
     // WCAG-mapped checks against the AccessibilityNodeInfo tree.
@@ -61,9 +72,31 @@ dependencies {
     testImplementation(libs.junit)
     // Local unit tests run on a plain JVM against android.jar stubs, which
     // throw at runtime for org.json.* (only Android's real implementation
-    // is usable, not the stub) -- DeviceProtocolTest exercises real
+    // is usable, not the stub) -- ApiJsonTest exercises real
     // JSONObject/JSONArray, so it needs a working implementation on the
     // test classpath. Same artifact android.jar's org.json is originally
     // vendored from.
     testImplementation(libs.json)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.ktor.server.test.host)
+}
+
+abstract class SyncDashboard : DefaultTask() {
+    @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val dist: ConfigurableFileCollection
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+    @get:Inject abstract val fs: FileSystemOperations
+
+    @TaskAction fun sync() {
+        val dir = dist.singleFile
+        if (!File(dir, "index.html").isFile) throw GradleException("Run \"npm run build\" in dashboard/ first")
+        fs.sync { from(dir); into(outputDir.dir("dashboard")) }
+    }
+}
+
+val syncDashboard = tasks.register<SyncDashboard>("syncDashboard") {
+    dist.from(rootProject.layout.projectDirectory.dir("../dashboard/dist"))
+}
+androidComponents {
+    onVariants { it.sources.assets?.addGeneratedSourceDirectory(syncDashboard, SyncDashboard::outputDir) }
 }

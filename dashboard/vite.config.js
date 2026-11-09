@@ -9,6 +9,7 @@ export default defineConfig({
   // (which needs `React` in scope) unless told explicitly. Scoped to `test` only
   // so it doesn't fight with the oxc config vite build/dev actually uses.
   ...(process.env.VITEST ? { esbuild: { jsx: 'automatic' } } : {}),
+  server: { proxy: { '/api': 'http://localhost:8080' } },
   test: {
     environment: 'jsdom',
     setupFiles: './src/setupTests.js',

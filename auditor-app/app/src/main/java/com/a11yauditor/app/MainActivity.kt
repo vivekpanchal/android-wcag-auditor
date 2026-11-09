@@ -1,48 +1,71 @@
 package com.a11yauditor.app
 
+import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Intent
-import android.content.pm.PackageManager
+import android.content.SharedPreferences
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PersistableBundle
 import android.provider.Settings
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.isVisible
+import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.a11yauditor.app.AuditorAccessibilityService.Companion.ServerStatus
 import com.a11yauditor.app.databinding.ActivityMainBinding
+import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** The setting may hold `pkg/.Class` or `pkg/full.Class`, so compare parsed names, not strings. */
+internal fun isServiceInSetting(setting: String?, service: ComponentName): Boolean =
+    setting?.split(':')?.any { ComponentName.unflattenFromString(it) == service } == true
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private var selectedPackage: String? = null
-    private val controlSync = ControlSync()
+    // Held in a field: SharedPreferences keeps only a weak reference. Keeps the buttons live when the dashboard starts or stops auditing.
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == AuditorAccessibilityService.KEY_TARGET_PACKAGE) loadTarget()
+        refreshStatus()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        val prefs = getSharedPreferences(AuditorAccessibilityService.PREFS_NAME, MODE_PRIVATE)
-        selectedPackage = prefs.getString(AuditorAccessibilityService.KEY_TARGET_PACKAGE, null)
-        binding.manualPackageInput.setText(selectedPackage ?: "")
-
-        val installedApps = loadInstalledApps()
+        val installedApps = loadInstalledApps(packageManager, packageName)
         binding.appList.layoutManager = LinearLayoutManager(this)
-        binding.appList.adapter = AppListAdapter(installedApps) { app ->
-            selectedPackage = app.packageName
+        val appAdapter = AppListAdapter(installedApps) { app ->
             binding.manualPackageInput.setText(app.packageName)
+            pickTarget(app.packageName)
         }
+        binding.appList.adapter = appAdapter
+        binding.appSearchInput.doAfterTextChanged { appAdapter.filter(it.toString()) }
 
         binding.manualPackageInput.setOnEditorActionListener { _, actionId, event ->
             val committed = actionId == EditorInfo.IME_ACTION_DONE ||
                 (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)
             if (committed) {
-                selectedPackage = binding.manualPackageInput.text.toString().trim().ifBlank { null }
+                pickTarget(binding.manualPackageInput.text.toString().trim().ifBlank { null })
+                dismissKeyboard()
             }
             committed
         }
@@ -51,61 +74,129 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
 
-        binding.settingsButton.setOnClickListener {
-            startActivity(Intent(this, SettingsActivity::class.java))
+        binding.openDashboardButton.setOnClickListener {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(dashboardUrl())))
+            } catch (e: ActivityNotFoundException) {
+                Toast.makeText(this, R.string.toast_no_browser, Toast.LENGTH_SHORT).show()
+            }
         }
 
-        binding.startStopButton.setOnClickListener { toggleAuditing() }
+        binding.copyUrlButton.setOnClickListener { copyDashboardUrl() }
+
+        binding.viewIssuesButton.setOnClickListener { openIssues() }
+
+        binding.startStopButton.setOnClickListener {
+            dismissKeyboard()
+            toggleAuditing()
+        }
 
         observeIssueCount()
         observeConnectionState()
+        observeServiceBound()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        prefs().registerOnSharedPreferenceChangeListener(prefsListener)
+        loadTarget() // the listener is off while stopped, and the dashboard may have set a target
+    }
+
+    override fun onStop() {
+        prefs().unregisterOnSharedPreferenceChangeListener(prefsListener)
+        super.onStop()
     }
 
     override fun onResume() {
         super.onResume()
         refreshStatus()
-        // Re-sent on every resume, not just the cold-start onCreate: the app
-        // list push is fire-and-forget, so if it missed (server not up yet,
-        // transient network blip) the dashboard's picker would otherwise stay
-        // empty until the Activity was destroyed and recreated.
-        controlSync.pushAppList(loadInstalledApps())
+        refreshIssueButton()
+    }
+
+    // shortcut: API 26-27 move focus to the first field on clearFocus(); stateAlwaysHidden still keeps the keyboard shut.
+    private fun dismissKeyboard() {
+        WindowCompat.getInsetsController(window, binding.root).hide(WindowInsetsCompat.Type.ime())
+        currentFocus?.clearFocus()
+    }
+
+    private fun openIssues() =startActivity(Intent(this, IssuesActivity::class.java))
+
+    private suspend fun issueGroups() = withContext(Dispatchers.IO) {
+        groupStored((application as AuditorApplication).store.issues()).size
+    }
+
+    private fun refreshIssueButton() {
+        lifecycleScope.launch { binding.viewIssuesButton.text = getString(R.string.btn_view_issues, issueGroups()) }
+    }
+
+    private fun offerIssues() {
+        lifecycleScope.launch {
+            val groups = issueGroups()
+            if (groups == 0) return@launch
+            Snackbar.make(binding.root, getString(R.string.snackbar_stopped, groups), Snackbar.LENGTH_LONG)
+                .setAnchorView(binding.startStopButton)
+                .setAction(R.string.btn_view) { openIssues() }
+                .show()
+        }
+    }
+
+    private fun prefs() = getSharedPreferences(AuditorAccessibilityService.PREFS_NAME, MODE_PRIVATE)
+
+    private fun loadTarget() {
+        selectedPackage = prefs().getString(AuditorAccessibilityService.KEY_TARGET_PACKAGE, null)
+        val shown = selectedPackage ?: ""
+        if (binding.manualPackageInput.text.toString() != shown) binding.manualPackageInput.setText(shown)
+    }
+
+    // Saved at once so the dashboard can start an audit. A running audit keeps its target until Start.
+    private fun pickTarget(pkg: String?) {
+        selectedPackage = pkg
+        val prefs = prefs()
+        if (prefs.getBoolean(AuditorAccessibilityService.KEY_IS_AUDITING, false)) return
+        if (prefs.getString(AuditorAccessibilityService.KEY_TARGET_PACKAGE, null) != pkg) {
+            prefs.edit().putString(AuditorAccessibilityService.KEY_TARGET_PACKAGE, pkg).apply()
+        }
+    }
+
+    private fun dashboardUrl() =
+        "${AuditorAccessibilityService.DASHBOARD_URL}?t=${DashboardToken.getOrCreate(prefs())}"
+
+    private fun copyDashboardUrl() {
+        val clip = ClipData.newPlainText(getString(R.string.label_clip_dashboard_url), dashboardUrl())
+        // The URL carries the token, so keep it out of clipboard previews.
+        if (Build.VERSION.SDK_INT >= 33) {
+            clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
+        }
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
+        Toast.makeText(this, R.string.toast_url_copied, Toast.LENGTH_LONG).show()
     }
 
     private fun toggleAuditing() {
-        val prefs = getSharedPreferences(AuditorAccessibilityService.PREFS_NAME, MODE_PRIVATE)
+        val prefs = prefs()
         val currentlyAuditing = prefs.getBoolean(AuditorAccessibilityService.KEY_IS_AUDITING, false)
 
         if (currentlyAuditing) {
             prefs.edit()
                 .putBoolean(AuditorAccessibilityService.KEY_IS_AUDITING, false)
                 .apply()
-            controlSync.pushControl(selectedPackage, auditing = false)
+            offerIssues()
         } else {
-            val pkg = selectedPackage
-            if (pkg.isNullOrBlank()) {
-                binding.statusText.text = "Pick a target app first"
+            // The field, not the last Done, so a typed package is used even without pressing Done.
+            val pkg = binding.manualPackageInput.text.toString().trim().ifBlank { null }
+            selectedPackage = pkg
+            if (pkg == null) {
+                binding.statusText.text = getString(R.string.status_pick_target)
                 return
             }
-            if (!isAccessibilityServiceEnabled()) {
-                binding.statusText.text = getString(R.string.status_service_disabled)
+            if (!serviceReady()) {
+                refreshStatus()
                 return
-            }
-            // Auditing still starts locally either way — the accessibility
-            // checks and the on-screen session count don't depend on the
-            // dashboard connection — but if the socket isn't up yet (just
-            // reconnected adb, server was still starting, etc.), say so
-            // explicitly instead of leaving it to look silently broken.
-            // DeviceSocket retries on its own every few seconds; this never
-            // needs a second tap once it catches up.
-            if (!AuditorAccessibilityService.deviceSocketConnected.value) {
-                Toast.makeText(this, R.string.toast_started_while_disconnected, Toast.LENGTH_LONG).show()
             }
             AuditorAccessibilityService.sessionIssueCount.value = 0
             prefs.edit()
                 .putString(AuditorAccessibilityService.KEY_TARGET_PACKAGE, pkg)
                 .putBoolean(AuditorAccessibilityService.KEY_IS_AUDITING, true)
                 .apply()
-            controlSync.pushControl(pkg, auditing = true)
         }
         refreshStatus()
     }
@@ -117,11 +208,13 @@ class MainActivity : AppCompatActivity() {
 
         binding.statusText.text = when {
             !serviceEnabled -> getString(R.string.status_service_disabled)
+            !serviceReady() -> getString(R.string.status_service_not_running)
             selectedPackage == null -> getString(R.string.status_no_target)
             else -> getString(R.string.status_service_enabled)
         }
         binding.startStopButton.text = getString(if (auditing) R.string.btn_stop else R.string.btn_start)
-        binding.startStopButton.isEnabled = serviceEnabled
+        binding.startStopButton.isEnabled = serviceReady() || auditing
+        binding.enableServiceButton.isVisible = !serviceReady()
     }
 
     private fun observeIssueCount() {
@@ -129,50 +222,50 @@ class MainActivity : AppCompatActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 AuditorAccessibilityService.sessionIssueCount.collect { count ->
                     binding.issueCountText.text = getString(R.string.label_issue_count, count)
+                    refreshIssueButton()
                 }
             }
         }
     }
 
-    // Live, not just refreshed on resume/click, so reconnecting after a drop
-    // (adb reverse redone, server restarted) visibly updates on its own —
-    // no need to reopen the app or tap anything to see it catch up.
+    private fun observeServiceBound() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                AuditorAccessibilityService.serviceBound.collect { refreshStatus() }
+            }
+        }
+    }
+
+    // Live, not just refreshed on resume/click, so the status follows the service starting or stopping.
     private fun observeConnectionState() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                AuditorAccessibilityService.deviceSocketConnected.collect { connected ->
+                AuditorAccessibilityService.serverStatus.collect { status ->
+                    val running = status == ServerStatus.Running
                     binding.connectionStatusText.text = getString(
-                        if (connected) R.string.label_connection_connected else R.string.label_connection_disconnected
+                        when (status) {
+                            ServerStatus.Running -> R.string.label_dashboard_running
+                            ServerStatus.Failed -> R.string.label_dashboard_failed
+                            ServerStatus.Stopped -> R.string.label_dashboard_off
+                        }
                     )
                     binding.connectionStatusText.setTextColor(
                         ContextCompat.getColor(
                             this@MainActivity,
-                            if (connected) R.color.status_connected else R.color.status_disconnected
+                            if (running) R.color.status_connected else R.color.status_disconnected
                         )
                     )
+                    binding.openDashboardButton.isEnabled = running
+                    binding.copyUrlButton.isEnabled = running
                 }
             }
         }
     }
 
-    private fun isAccessibilityServiceEnabled(): Boolean {
-        val expected = "$packageName/${AuditorAccessibilityService::class.java.name}"
-        val enabled = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-        return enabled.split(':').any { it.equals(expected, ignoreCase = true) }
-    }
+    private fun serviceReady() = isAccessibilityServiceEnabled() && AuditorAccessibilityService.serviceBound.value
 
-    private fun loadInstalledApps(): List<InstalledAppInfo> {
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        return packageManager.queryIntentActivities(intent, PackageManager.MATCH_ALL)
-            .asSequence()
-            .map { it.activityInfo }
-            .filter { it.packageName != packageName }
-            .distinctBy { it.packageName }
-            .map { InstalledAppInfo(it.loadLabel(packageManager).toString(), it.packageName, it.loadIcon(packageManager)) }
-            .sortedBy { it.appName.lowercase() }
-            .toList()
-    }
+    private fun isAccessibilityServiceEnabled() = isServiceInSetting(
+        Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES),
+        ComponentName(this, AuditorAccessibilityService::class.java),
+    )
 }

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <TextView
+        android:id="@+id/groupHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:accessibilityHeading="true"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="4dp"
+        android:textAppearance="?attr/textAppearanceSubtitle2"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/row"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true"
+        android:minHeight="48dp"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:id="@+id/severityText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/elementText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textAppearance="?attr/textAppearanceBody2"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/descriptionText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textAppearance="?attr/textAppearanceBody2" />
+
+        <ImageView
+            android:id="@+id/shot"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:adjustViewBounds="true"
+            android:maxHeight="320dp"
+            android:scaleType="fitCenter"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/fixText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textAppearance="?attr/textAppearanceBody2"
+            android:typeface="monospace"
+            android:visibility="gone" />
+
+    </LinearLayout>
+
+</LinearLayout>

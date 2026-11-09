@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="status_connected">#81C784</color>
+    <color name="status_disconnected">#FFB4AB</color>
+    <color name="severity_serious">#FFB4AB</color>
+    <color name="severity_moderate">#FFD08A</color>
+</resources>

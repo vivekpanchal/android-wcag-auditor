@@ -5,4 +5,10 @@
     <color name="white">#FFFFFF</color>
     <color name="status_connected">#2E7D32</color>
     <color name="status_disconnected">#B00020</color>
+    <color name="severity_serious">#B00020</color>
+    <color name="severity_moderate">#7A5000</color>
+    <!-- Bubble fill under white text, so these stay dark in both themes. -->
+    <color name="bubble_serious">#B00020</color>
+    <color name="bubble_moderate">#7A5000</color>
+    <color name="bubble_clean">#2E7D32</color>
 </resources>

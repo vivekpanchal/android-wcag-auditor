@@ -1,5 +1,9 @@
 package com.a11yauditor.app
 
+import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.view.LayoutInflater
 import android.view.ViewGroup
@@ -8,12 +12,35 @@ import com.a11yauditor.app.databinding.ItemAppBinding
 
 data class InstalledAppInfo(val appName: String, val packageName: String, val icon: Drawable)
 
+/** Launchable user-installed apps other than this one, one per package, sorted by label. Updated system apps stay hidden too. */
+fun launchableApps(pm: PackageManager, ownPackage: String): List<ActivityInfo> {
+    val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    return pm.queryIntentActivities(intent, PackageManager.MATCH_ALL)
+        .asSequence()
+        .map { it.activityInfo }
+        .filter { it.packageName != ownPackage && it.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM == 0 }
+        .distinctBy { it.packageName }
+        .sortedBy { it.loadLabel(pm).toString().lowercase() }
+        .toList()
+}
+
+fun loadInstalledApps(pm: PackageManager, ownPackage: String): List<InstalledAppInfo> =
+    launchableApps(pm, ownPackage).map { InstalledAppInfo(it.loadLabel(pm).toString(), it.packageName, it.loadIcon(pm)) }
+
 class AppListAdapter(
-    private val apps: List<InstalledAppInfo>,
+    private val allApps: List<InstalledAppInfo>,
     private val onSelect: (InstalledAppInfo) -> Unit,
 ) : RecyclerView.Adapter<AppListAdapter.ViewHolder>() {
 
+    private var apps = allApps
     private var selectedPackage: String? = null
+
+    @android.annotation.SuppressLint("NotifyDataSetChanged") // the whole list can change per keystroke
+    fun filter(query: String) {
+        val q = query.trim()
+        apps = allApps.filter { it.appName.contains(q, ignoreCase = true) || it.packageName.contains(q, ignoreCase = true) }
+        notifyDataSetChanged()
+    }
 
     class ViewHolder(val binding: ItemAppBinding) : RecyclerView.ViewHolder(binding.root)
 

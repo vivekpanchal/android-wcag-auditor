@@ -3,25 +3,50 @@
     <string name="app_name">A11y Auditor</string>
     <string name="accessibility_service_description">Watches the app you pick below and reports WCAG accessibility issues to your local dashboard as you navigate it. Does not read or transmit content from any other app.</string>
 
-    <string name="hint_manual_package">Or type a package name…</string>
+    <string name="hint_manual_package">Or type a package name, for system apps too…</string>
     <string name="btn_start">Start Auditing</string>
     <string name="btn_stop">Stop Auditing</string>
     <string name="btn_enable_service">Enable Accessibility Service</string>
     <string name="status_service_disabled">Accessibility service is OFF — enable it to start auditing</string>
+    <string name="status_service_not_running">Accessibility service is enabled but not running. Turn it off and on again in Settings.</string>
     <string name="status_service_enabled">Accessibility service is ON</string>
     <string name="status_no_target">No target app selected</string>
     <string name="label_issue_count">Issues found this session: %1$d</string>
-    <string name="label_connection_connected">Dashboard: connected</string>
-    <string name="label_connection_disconnected">Dashboard: reconnecting… findings are held locally until it\'s back</string>
-    <string name="toast_started_while_disconnected">Auditing started, but not connected to the dashboard yet — it\'ll catch up automatically, no need to redo this.</string>
-
-    <string name="btn_settings">Settings</string>
-    <string name="settings_title">Connection</string>
-    <string name="settings_subtitle">Control the persistent connection this app uses to report issues and receive Start/Stop commands from the dashboard.</string>
-    <string name="settings_service_running">Accessibility service is running</string>
-    <string name="settings_service_not_running">Accessibility service is off — enable it for this to take effect live; your choice below is still saved.</string>
-    <string name="settings_status_connected">Connected to server</string>
-    <string name="settings_status_disconnected">Disconnected</string>
-    <string name="btn_connect">Connect</string>
-    <string name="btn_disconnect">Disconnect</string>
+    <string name="btn_open_dashboard">Open dashboard</string>
+    <string name="btn_copy_url">Copy laptop URL</string>
+    <string name="label_clip_dashboard_url">Dashboard URL</string>
+    <string name="toast_url_copied">Copied. On your laptop run: adb forward tcp:8080 tcp:8080</string>
+    <string name="toast_no_browser">No browser found</string>
+    <string name="label_dashboard_running">Dashboard: running at localhost:8080</string>
+    <string name="label_dashboard_failed">Dashboard failed to start: port 8080 is in use (run \"adb reverse --remove tcp:8080\"). Auditing still works.</string>
+    <string name="label_target">Target app</string>
+    <string name="hint_search_apps">Search apps</string>
+    <string name="status_pick_target">Pick a target app first</string>
+    <string name="btn_view_issues">View issues (%1$d)</string>
+    <string name="btn_view">View</string>
+    <string name="snackbar_stopped">Audit stopped. Unique issues stored: %1$d</string>
+    <string name="btn_close">Close</string>
+    <string name="btn_clear">Clear</string>
+    <string name="title_issues">Issues</string>
+    <string name="filter_all">All</string>
+    <string name="filter_serious">Serious</string>
+    <string name="filter_moderate">Moderate</string>
+    <string name="issues_empty">No issues to show.</string>
+    <string name="clear_confirm">Delete all stored issues and screenshots? This cannot be undone.</string>
+    <string name="overlay_clean">No issues found on this screen.</string>
+    <string name="issue_meta">%1$s · %2$s %3$s</string>
+    <string name="issue_meta_count">%1$s · %2$s %3$s · seen %4$d times</string>
+    <string name="desc_issue_shot">Screenshot with %1$s outlined</string>
+    <string name="desc_back">Back</string>
+    <string name="state_expanded">Expanded</string>
+    <string name="state_collapsed">Collapsed</string>
+    <plurals name="overlay_bubble_label">
+        <item quantity="one">%1$d issue on this screen, open</item>
+        <item quantity="other">%1$d issues on this screen, open</item>
+    </plurals>
+    <plurals name="overlay_panel_title">
+        <item quantity="one">%1$d issue on this screen</item>
+        <item quantity="other">%1$d issues on this screen</item>
+    </plurals>
+    <string name="label_dashboard_off">Dashboard: off — enable the accessibility service</string>
 </resources>

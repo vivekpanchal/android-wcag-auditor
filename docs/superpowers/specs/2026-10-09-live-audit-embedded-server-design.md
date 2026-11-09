@@ -35,7 +35,8 @@ WCAG compliance faster, and find accessibility issues at a much faster rate.
 - Issues inside dialogs, bottom sheets and popup menus are reported under their own screen.
 - Every mapped ATF check shows a Views and a Compose fix snippet.
 - No laptop server: install APK, enable service, open dashboard.
-- No other app on the phone can read audit data without the token.
+- No other app on the phone can read audit data without the token. The dashboard sends it as
+  `Authorization: Bearer`, never in a cookie (see §6).
 
 ## 2. Current state (baseline)
 
@@ -130,7 +131,6 @@ note in `checkHierarchy`).
 
 | Route | Purpose |
 |---|---|
-| `POST /auth` | exchange token for session cookie |
 | `GET /issues?status=` | list issues |
 | `PATCH /issues/{id}` | set `ignored` or back to `open` |
 | `DELETE /issues` | clear session (issues, screens, screenshots) |
@@ -155,17 +155,25 @@ All other paths serve the dashboard from APK assets.
 - Binding to `127.0.0.1` keeps the network out, but any app on the phone can still connect to
   localhost. Without authentication another app could read screenshots of audited screens
   (banking, OTPs, messages).
-- A random token is generated once per install. Every route except static assets and
-  `POST /auth` requires the session cookie (HttpOnly, SameSite=Strict) obtained via
-  `POST /auth`.
+- A random token is generated once per install. Every `/api/v1/*` route requires
+  `Authorization: Bearer <token>`; only static assets are open. There is no cookie: cookies have
+  no port isolation (RFC 6265 §8.5), so one holding the token would reach any app listening on
+  another localhost port.
+- The server sends no CORS headers, so a cross-origin `Authorization` header fails preflight.
+  That is the CSRF defence.
+- Accepted residual risk (N1): an open tab sends the token on every retry, so any app binding
+  8080 while the service is off gets the token without a reload. See Future work in the Phase 2 plan.
 - The app shows **Open dashboard** (opens the phone browser at `http://localhost:8080/?t=<token>`)
   and **Copy laptop URL** (for use after `adb forward tcp:8080 tcp:8080`).
 
 ## 7. Dashboard
 
-- API base is relative (`/api/v1`). On load, if `?t=` is present, POST it to `/api/v1/auth`, then
-  strip it with `history.replaceState`. Works whether served by the device or by Vite.
-- WebSocket replaced by `EventSource('/api/v1/events')`. While the stream is down, show a
+- API base is relative (`/api/v1`). On load, if `?t=` is present, store it in `sessionStorage`
+  under `a11y_token` and strip it with `history.replaceState`, before any request. Every request
+  sends it as a Bearer header; a 401 removes it. Works whether served by the device or by Vite.
+- WebSocket replaced by a streaming `fetch` of `/api/v1/events`, parsed as SSE, because
+  EventSource cannot send headers. Screenshots are fetched the same way and shown through blob
+  URLs, because `<img>` cannot either. While the stream is down, show a
   "Device disconnected — reconnecting…" banner (`aria-live="polite"`). Remove the heartbeat-based
   online indicator and the disabled-Start logic.
 - Status tabs: Open / Regressed / Fixed / Ignored with counts; default view Open + Regressed.
@@ -209,11 +217,11 @@ All other paths serve the dashboard from APK assets.
   signature; fingerprint stability across rescans; list-row collapse.
 - Every row of the status-transition table in §3, including "element absent → unchanged".
 - Store (Robolectric, test-only): fingerprint upsert, occurrences, screenshot cap eviction order.
-- Routes (Ktor `testApplication`): 401 without cookie, cookie after `/auth`, upsert emits SSE
-  `issue`, `PATCH` ignore, `DELETE` clear.
+- Routes (Ktor `testApplication`): 401 without the Bearer header and with only a cookie, upsert
+  emits SSE `issue`, `PATCH` ignore, `DELETE` clear.
 - `WcagMappingTest`: every mapped check has a non-empty fix.
 
-**Dashboard (Vitest):** mocked `EventSource`, status tabs and counts, Ignore, reconnect banner,
+**Dashboard (Vitest):** fake streaming `fetch`, status tabs and counts, Ignore, reconnect banner,
 client-side export.
 
 **Manual device checklist:**
@@ -223,7 +231,7 @@ client-side export.
 - [ ] Scrolling a long list marks nothing fixed.
 - [ ] Fixing an issue in the target app and revisiting marks it fixed; reintroducing it marks
       it regressed.
-- [ ] Another app (or `adb shell curl` without cookie) gets 401 from `/api/v1/issues`.
+- [ ] Another app (or a request through `adb forward` without the Bearer header) gets 401 from `/api/v1/issues`.
 - [ ] Open dashboard works in the phone browser; Copy laptop URL works after `adb forward`.
 
 ## 11. Phasing
