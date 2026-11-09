@@ -166,6 +166,9 @@ class AuditOverlay(
                 }
                 MotionEvent.ACTION_UP -> if (dragged) {
                     val size = displaySize()
+                    // Snap to the nearer side edge, so the bubble covers the screen edge, not content.
+                    params.x = if (params.x + bubbleSize / 2 < size.x / 2) 0 else size.x - bubbleSize
+                    updateWindow(v, params)
                     prefs.edit()
                         .putFloat(KEY_BUBBLE_X, params.x / (size.x - bubbleSize).toFloat())
                         .putFloat(KEY_BUBBLE_Y, params.y / (size.y - bubbleSize).toFloat())
