@@ -61,6 +61,9 @@ class AuditorAccessibilityService : AccessibilityService() {
     private var missedChange = false
     private var server: AuditServer? = null
     private var startJob: Job? = null
+    // Main thread only. Distinct findings this session, and the last pass recorded.
+    private val sessionFindings = mutableSetOf<FindingKey>()
+    private var lastRecorded: Set<FindingKey>? = null
 
     // Held in a field: SharedPreferences keeps only a weak reference to its listeners.
     private val controlListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -69,7 +72,13 @@ class AuditorAccessibilityService : AccessibilityService() {
         try {
             if (key == KEY_TARGET_PACKAGE) mainHandler.post { baseScreen.reset() }
             if (key == KEY_IS_AUDITING) {
-                if (prefs.getBoolean(KEY_IS_AUDITING, false)) sessionIssueCount.value = 0
+                if (prefs.getBoolean(KEY_IS_AUDITING, false)) {
+                    sessionIssueCount.value = 0
+                    mainHandler.post {
+                        sessionFindings.clear()
+                        lastRecorded = null
+                    }
+                }
                 else mainHandler.post { stopLive() }
             }
             deps?.publishControl()
@@ -258,12 +267,16 @@ class AuditorAccessibilityService : AccessibilityService() {
         overlay?.render(LiveScan.from(results))
         val perWindow = results.filter { it.second.isNotEmpty() }
         Log.d(TAG, "runAudit: ${perWindow.sumOf { it.second.size }} issue(s) across ${targetWindows.size} window(s) ${results.map { it.first }}")
+        // An animating screen re-sends the same findings every pass; record only when they change.
+        val keys = findingKeys(perWindow)
+        if (keys == lastRecorded) return
+        lastRecorded = keys
+        if (sessionFindings.addAll(keys)) sessionIssueCount.value = sessionFindings.size
         if (perWindow.isEmpty()) return
 
         captureWithoutOverlay { shot ->
             if (!isAuditing()) return@captureWithoutOverlay
             perWindow.forEach { (label, issues) ->
-                sessionIssueCount.value += issues.size
                 val d = deps ?: return@forEach
                 serviceScope.launch {
                     try {
